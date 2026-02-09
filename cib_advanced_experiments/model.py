@@ -95,9 +95,12 @@ class SynthControlModel(torch.nn.Module):
         Returns:
             None
         """
-        self.x = torch.from_numpy(X.astype(np.float32))
-        self.y = torch.from_numpy(y.astype(np.float32)).reshape(y.shape[0])
-        self.generator = torch.Generator()
+        device = torch.device(self.device)
+        self.x = torch.from_numpy(X.astype(np.float32)).to(device)
+        self.y = (
+            torch.from_numpy(y.astype(np.float32)).reshape(y.shape[0]).to(device)
+        )
+        self.generator = torch.Generator(device=device)
         self.generator.manual_seed(self.seed)
         # initiate start weights
         self.w = torch.nn.Parameter(
@@ -105,12 +108,13 @@ class SynthControlModel(torch.nn.Module):
                 0,
                 0.1,
                 (X.shape[1],),
-                device=self.device,
+                device=device,
                 generator=self.generator,
                 dtype=torch.float32,
                 requires_grad=True,
             )
         )
+        self.crit = self.crit.to(device)
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         for t in range(self.epochs):
             y_pred = self.forward(self.x)
@@ -120,8 +124,8 @@ class SynthControlModel(torch.nn.Module):
             self.optimizer.step()
         self.__weights = torch.softmax(
             list(self.parameters())[0].T.detach(), dim=-1
-        ).numpy()
-        self.__loss_value = loss.detach().numpy()
+        ).cpu().numpy()
+        self.__loss_value = loss.detach().cpu().numpy()
 
     def get_weights(self) -> np.ndarray:
         """
