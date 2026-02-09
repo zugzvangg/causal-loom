@@ -1,0 +1,595 @@
+import datetime
+import warnings
+from typing import List, Literal, Union
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from loguru import logger
+from matplotlib import style
+from sklearn.preprocessing import StandardScaler
+
+from cib_advanced_experiments.model import SynthControlModel
+
+warnings.filterwarnings(action="ignore", category=DeprecationWarning)
+warnings.simplefilter(action="ignore", category=FutureWarning)
+warnings.simplefilter(action="ignore", category=UserWarning)
+warnings.simplefilter(action="ignore", category=RuntimeWarning)
+
+style.use("fivethirtyeight")
+
+
+class SyntheticControl:
+    """Module for processing synthetic control.
+    Realization is inspired by: https://matheusfacure.github.io/python-causality-handbook/15-Synthetic-Control.html
+
+    Args:
+        data (pd.DataFrame): Dataframe on which the stynthetic control will be processed.
+            Should have the the following column structure: unit_column, date_column, feat_0, feat_1,..., feat_n.
+            Each row in dataset represents one observation.
+
+        unit_column (str): Column from 'data' which divides units(cnum, cocunut, etc.).
+        date_column (str): Column from 'data' with the date of event rows(trade_date, deal_date, etc.).
+        features (str): Columns from 'data' with the numeric features we want to use for fitting
+            and check the effect on(pnl, amount, etc.).
+
+        treated_unit (Union[str, int]): Unit from the value of date[unit_column], which was treated and we want to
+            see the effect on.
+
+        treatment_date (Union[str, datetime.datetime], optional): Date of test unit been treated. Should be in the range of 'date_column' values
+            or between 'min_date' and 'max_date'.
+
+        control_group (List[Union[str, int]], optional): Group of ids from date[unit_column] which to be taken for control group.
+            If None, the automactic matching would be done.
+
+        min_date (Union[str, datetime.datetime], optional): Minimal date of column 'date_column' of dataset 'data'
+            to take for synthetic control, including. Defaults to None. If None, the minimal date from 'date' will be taken.
+
+        max_date (Union[str, datetime.datetime], optional): Maximal date of column 'date_column' of dataset 'data'
+            to take for synthetic control, including. Defaults to None. If None, the maximal date from 'date' will be taken.
+
+        date_frequency (Literal["D", "W", "M", "Y], optional): Data frequency aggregation based on time.
+        Possible: "D": daily, "W": weekly, "M": monthly, "Y": yearly. Defaults to "D".
+
+        aggregation_statistics (Literal["sum", "mean", "max", "min"], optional): Statistics of arggregation.
+            For example, if we work with fx deals, and want to have data on mean deal_turnover per week, we set:
+            date_frequency = "W", aggregation_statistics = "mean". Defaults to "mean".
+
+        **seed (int): Random seed for model.
+        **loss_func(Literal["mse", "mae"]): Optimize function for model.
+        **epochs (int): Number of epochs for studying of the model.
+        **lr (float): Learning rate of the model.
+
+    Returns:
+        None
+    """
+
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        unit_column: str,
+        date_column: str,
+        features: List[str],
+        treated_unit: Union[str, int],
+        treatment_date: Union[str, datetime.datetime],
+        control_group: List[Union[str, int]] = None,
+        min_date: Union[str, datetime.datetime] = None,
+        max_date: Union[str, datetime.datetime] = None,
+        number_of_units_for_matching: int = None,
+        categorical_matching: List[str] = None,
+        numeric_matching: List[str] = None,
+        date_frequency: Literal["D", "W", "M", "Y"] = "D",
+        aggregation_statistic: Literal["sum", "mean", "max", "min"] = "mean",
+        **kwargs,
+    ) -> None:
+        self.data = data.copy()
+        # emperical + dont't touch it + don't care
+        self.MINIMAL_CONTROL_GROUP_SIZE = 10
+        self.__validate_data(
+            unit_column=unit_column, date_column=date_column, features=features
+        )
+        self.__check_if_treated_unit_is_in_dataframe(treated_unit=treated_unit)
+        self.__handle_dates(
+            min_date=min_date, max_date=max_date, treatment_date=treatment_date
+        )
+        self.__filter_data_by_date()
+        self.__set_control_group(
+            control_group=control_group,
+            number_of_units_for_matching=number_of_units_for_matching,
+            categorical_matching=categorical_matching,
+            numeric_matching=numeric_matching,
+        )
+
+        self.__init_data_frequency(date_frequency=date_frequency)
+        self.__init_aggregation_statistic(aggregation_statistic=aggregation_statistic)
+        self.__upsample_events_dataframe()
+        self.__add_boolean_columns_of_treatment_unit_and_treatment_date()
+        self.__aggregate_data()
+        self.__init_model(kwargs)
+
+    def __validate_data(
+        self, unit_column: str, date_column: str, features: List[str]
+    ) -> None:
+        """
+        Check that all given columns are in the given dataframe.
+
+        Args:
+            unit_column (str): Column name for units.
+            date_column (str): Column name for dates.
+            features (List[str]): List of feature column names.
+
+        Returns:
+            None
+        """
+        for column in [unit_column, date_column] + features:
+            assert (
+                column in self.data.columns.values
+            ), f"Column {column} not in data axis"
+        self.unit_column = unit_column
+        # lets have ids as strings
+        self.data[self.unit_column] = self.data[self.unit_column].astype(str)
+        self.date_column = date_column
+        self.data[self.date_column] = pd.to_datetime(self.data[self.date_column])
+        self.features = features
+        # Check that dataframe has equal number of dots for every unit
+        assert (
+            self.data[self.unit_column].value_counts().reset_index()["count"].nunique()
+            == 1
+        ), f"Check that for every {self.unit_column} there is equal number of rows in DataFrame, for equal dates"
+
+    def __check_if_treated_unit_is_in_dataframe(
+        self, treated_unit: Union[str, int]
+    ) -> None:
+        """
+        Check that the treated unit id is in the dataset.
+
+        Args:
+            treated_unit (Union[str, int]): The treated unit id.
+
+        Returns:
+            None
+        """
+        assert (
+            str(treated_unit) in self.data[self.unit_column].values
+        ), f"Unit {treated_unit} not in {self.unit_column} axis"
+        self.treated_unit = str(treated_unit)
+
+    def __set_control_group(
+        self,
+        control_group: List[str],
+        number_of_units_for_matching: Union[int, None] = None,
+        categorical_matching: List[str] = None,
+        numeric_matching: List[str] = None,
+    ) -> None:
+        """
+        Get only the given ids from the dataframe, if given.
+        If they are not given, all units are taken.
+
+        Args:
+            control_group (List[str]): List of control unit ids.
+            features (features: List[str]): On which features to make matching
+            number_of_units_for_matching (int, optional): How many units to take into matching
+
+        Returns:
+            None
+        """
+        if control_group and number_of_units_for_matching:
+            raise ValueError(
+                """You passed both 'control_group' directly and 'number_of_units_for_matching'. Pass only one of them: 'control_group' 
+            if you want to set your own or 'number_of_units_for_matching' if you want to match the group."""
+            )
+        if not control_group:
+            # if control group is not set, make matching
+            assert (
+                number_of_units_for_matching
+            ), "Set 'number_of_units_for_matching' variable to some integer value, if you do not want to use matching set the 'control_group' directly."
+            assert (
+                categorical_matching or numeric_matching
+            ), "Set either 'categorical_matching' or 'numeric_matching' for automatic matching."
+
+            control_group = self.__matching(
+                categorical_matching=categorical_matching,
+                numeric_matching=numeric_matching,
+                number_of_units_for_matching=number_of_units_for_matching,
+            )
+            self.control_group_via_matching = True
+        else:
+            self.control_group_via_matching = False
+        assert (
+            len(control_group) >= self.MINIMAL_CONTROL_GROUP_SIZE
+        ), f"To small 'control_group'. Make it at least {self.MINIMAL_CONTROL_GROUP_SIZE} units."
+        # otherwise the given control group is taken directly
+        # Given ids may be of not same type as ids in unit_column.
+        # Convert to strings too for consistency.
+        control_group = list(map(str, control_group))
+        # if treated in control group, drop it
+        control_group = [x for x in control_group if x != self.treated_unit]
+        self.data = self.data[
+            self.data[self.unit_column].isin(control_group + [self.treated_unit])
+        ].copy()
+        self.control_group = control_group
+
+    def __validate_matching_features(
+        self, categorical_matching: List[str], numeric_matching: List[str]
+    ):
+        if categorical_matching is None:
+            categorical_matching = []
+        if numeric_matching is None:
+            numeric_matching = []
+
+        missing_exact = set(categorical_matching) - set(self.data.columns)
+        missing_numeric = set(numeric_matching) - set(self.data.columns)
+        if missing_exact:
+            raise ValueError(f"Exact matching columns not found: {missing_exact}")
+        if missing_numeric:
+            raise ValueError(f"Numeric matching columns not found: {missing_numeric}")
+
+        for col in numeric_matching:
+            if not pd.api.types.is_numeric_dtype(self.data[col]):
+                raise ValueError(f"Column '{col}' is not numeric")
+
+    def __matching(
+        self,
+        categorical_matching: List[str],
+        numeric_matching: List[str],
+        number_of_units_for_matching: int,
+    ) -> List[str]:
+        """
+        Matches clients that exactly match on `categorical_matching` features and are closest by `numeric_matching` features
+        """
+        self.__validate_matching_features(
+            categorical_matching=categorical_matching, numeric_matching=numeric_matching
+        )
+
+        pre_treatment_data = self.data[
+            self.data[self.date_column] < self.treatment_date
+        ]
+
+        treated_unit_data = pre_treatment_data[
+            pre_treatment_data[self.unit_column] == self.treated_unit
+        ]
+        if treated_unit_data.empty:
+            raise ValueError(
+                f"No pre-treatment data for treated unit {self.treated_unit}"
+            )
+
+        # Exact matching
+        control_candidates = pre_treatment_data
+        if categorical_matching:
+            treated_categorical_values = {
+                feature: treated_unit_data.iloc[0][feature]
+                for feature in categorical_matching
+            }
+
+            mask = control_candidates[categorical_matching].apply(
+                lambda row: all(
+                    row[feature] == treated_categorical_values[feature]
+                    for feature in categorical_matching
+                ),
+                axis=1,
+            )
+            control_candidates = control_candidates[mask]
+
+        # If no exact match is found, use fallback
+        if control_candidates.empty:
+            logger.warning(
+                "No candidates after exact matching. Using all candidates for numeric matching."
+            )
+            control_candidates = pre_treatment_data[
+                pre_treatment_data[self.unit_column] != self.treated_unit
+            ]
+
+        if control_candidates.empty:
+            raise ValueError("No control candidates available after fallback.")
+
+        # If numeric metrics are available, compute Euclidean distance
+        if numeric_matching:
+            control_means = (
+                control_candidates.groupby(self.unit_column)[numeric_matching]
+                .mean()
+                .reset_index()
+            )
+            treated_means = (
+                treated_unit_data[numeric_matching].mean().values.reshape(1, -1)
+            )
+
+            # Normalize
+            numeric_data = control_means[numeric_matching].values
+            # Fit and transform data with the same Scaler
+            scaler = StandardScaler()
+            numeric_data_scaled = scaler.fit_transform(numeric_data)
+            treated_means_scaled = scaler.transform(treated_means)
+
+            control_means["distance"] = np.linalg.norm(
+                numeric_data_scaled - treated_means_scaled, axis=1
+            )
+            closest = (
+                control_means.nsmallest(number_of_units_for_matching, "distance")[
+                    self.unit_column
+                ]
+                .astype(str)
+                .tolist()
+            )
+        else:
+            # If no numeric metrics are available, take the first N results after exact match
+            closest = (
+                control_candidates[self.unit_column]
+                .unique()
+                .tolist()[:number_of_units_for_matching]
+            )
+
+        return closest
+
+    def __handle_dates(
+        self,
+        min_date: Union[str, datetime.datetime],
+        max_date: Union[str, datetime.datetime],
+        treatment_date: Union[str, datetime.datetime],
+    ) -> None:
+        """
+        Make similar format for all dates used.
+
+        Args:
+            min_date (Union[str, datetime.datetime], optional): Minimal date.
+            max_date (Union[str, datetime.datetime], optional): Maximal date.
+            treatment_date (Union[str, datetime.datetime], optional): Date of treatment.
+
+        Returns:
+            None
+        """
+        # If max_date/min_date are not given, we take max and min of dates range from 'date_column'
+        self.min_date = pd.to_datetime(
+            min_date if min_date else self.data[self.date_column].dt.date.min()
+        )
+        self.max_date = pd.to_datetime(
+            max_date if max_date else self.data[self.date_column].dt.date.max()
+        )
+        treatment_date = pd.to_datetime(treatment_date)
+        assert (treatment_date > self.min_date) and (
+            treatment_date < self.max_date
+        ), f"treatment_date should be between min_date and max_date. {treatment_date=}, {self.min_date=}, {self.max_date=}"
+        self.treatment_date = treatment_date
+
+    def __upsample_events_dataframe(self) -> None:
+        """
+        For synth control we need to have a row for each unit for each date.
+        Add dummy zero events to ensure consistent size required for synth control
+
+        Returns:
+            None
+        """
+        aggregations_dict = {}
+        for column in self.features:
+            # TODO: Make a multiple choice of metrics to look for.
+            aggregations_dict[column] = self.aggregation_statistic
+        # Ranging by WORKING(monday - friday) days
+        dates = pd.date_range(self.min_date, self.max_date, freq=self.date_frequency)
+        users = self.data[self.unit_column].unique()
+        idx = pd.MultiIndex.from_product(
+            (users, dates), names=[self.unit_column, self.date_column]
+        )
+        self.data = (
+            self.data.groupby(
+                [
+                    self.unit_column,
+                    pd.Grouper(key=self.date_column, freq=self.date_frequency),
+                ]
+            )
+            .agg(aggregations_dict)
+            .reindex(idx, fill_value=0.0)
+        ).reset_index()
+
+    def __add_boolean_columns_of_treatment_unit_and_treatment_date(self) -> None:
+        """
+        Just for having an opportunity to filter vectorized dataframe.
+
+        Returns:
+            None
+        """
+        self.data["is_treated"] = self.data[self.unit_column] == self.treated_unit
+        self.data["after_treatment"] = self.data[self.date_column] > self.treatment_date
+
+    def __init_data_frequency(
+        self, date_frequency: Literal["D", "W", "M", "Y"]
+    ) -> None:
+        """
+        Function sets the aggregation granularity for the processed dataset.
+
+        Args:
+            date_frequency (Literal["D", "W", "M", "Y"]): Frequency of data aggregation.
+
+        Returns:
+            None
+        """
+        possible_frequencies = ["D", "W", "M", "Y"]
+        assert (
+            date_frequency in possible_frequencies
+        ), f"Select frequency from {possible_frequencies}"
+        self.date_frequency = date_frequency
+
+    def __init_aggregation_statistic(
+        self, aggregation_statistic: Literal["sum", "mean", "max", "min"]
+    ) -> None:
+        """
+        Function sets the aggregation statistic for the processed dataset.
+
+        Args:
+            aggregation_statistic (Literal["sum", "mean", "max", "min"]): Aggregation statistic.
+        """
+        possible_statistics = ["sum", "mean", "max", "min"]
+        assert (
+            aggregation_statistic in possible_statistics
+        ), f"Select statistic from {possible_statistics}"
+        self.aggregation_statistic = aggregation_statistic
+
+    def __filter_data_by_date(self) -> None:
+        """
+        We do not need all the data range, so we filter
+
+        Returns:
+            None
+        """
+        self.data = self.data[
+            (self.data[self.date_column] >= self.min_date)
+            & (self.data[self.date_column] <= self.max_date)
+        ]
+
+    def __aggregate_data(self) -> None:
+        """
+        Pivoting data in needed format.
+
+        Returns:
+            None
+        """
+        self.data = self.data.sort_values(self.date_column)
+        self.all_dates = self.data.query("is_treated")[self.date_column]
+        self.all_dates.index = list(range(1, len(self.all_dates) + 1))
+        self.processed_data = (
+            self.data.query("~after_treatment")
+            .pivot(index=self.unit_column, columns=self.date_column)[self.features]
+            .T.fillna(0.0)
+        )
+
+        # Get X and y for fitting model
+        self.__y = self.processed_data[self.treated_unit].values
+        self.__X = self.processed_data.drop(columns=self.treated_unit).values
+
+    def __init_model(self, kwargs):
+        """
+        Initialize the model with parameters from the constructor.
+
+        Args:
+            kwargs (dict): Additional keyword arguments for the SynthControlModel.
+
+        Returns:
+            None
+        """
+        self.model = SynthControlModel(**kwargs)
+        self.__weights = None
+
+    def fit(self) -> None:
+        """
+        Method to fit synthetic control. Call after initialization.
+
+        Returns:
+            None
+        """
+        self.model.fit(self.__X, self.__y)
+        self.__weights = self.model.get_weights()
+
+    def get_weights(self) -> np.ndarray:
+        """
+        Get the weights of the synthetic control model.
+
+        Returns:
+            np.ndarray: Array of weights.
+        """
+        return self.__weights
+
+    def get_data_on_features(self, feature: str) -> pd.DataFrame:
+        """
+        Get the real and synthetic data for a specific feature.
+
+        Args:
+            feature (str): Feature to get data for.
+
+        Returns:
+            pd.DataFrame: DataFrame with real and synthetic data for the feature.
+        """
+        assert feature in self.features, f"Select feature from {self.features}"
+        assert self.__weights is not None, "Fit model first with .fit()"
+        # put all values in atributed to be able to get them
+        real = self.data.query("is_treated")[feature].to_list()
+        synth = (
+            self.data.query("~is_treated")
+            .pivot(index=self.date_column, columns=self.unit_column)[feature]
+            .astype(float)
+            .values.dot(self.__weights)
+        )
+        result = pd.DataFrame(
+            data={"date": self.all_dates, "real": real, "synthetic": synth}
+        )
+        return result
+
+    def get_pre_treatment_mean(self, feature: str) -> float:
+        """
+        Mean value of feature for treated_unit in treatment_date.
+        """
+        treated_data = self.data[
+            (self.data[self.unit_column] == self.treated_unit)
+            & (self.data[self.date_column] < self.treatment_date)
+        ]
+        return treated_data[feature].mean()
+
+    def plot_results(self, feature: str, top_weights_to_plot: int = 5) -> None:
+        """
+        Method plots the 'feature' of 'treated_unit' and synth of 'control_group'.
+        Also plots the fitting weights distribution.
+
+        Args:
+            feature (str): Feature to plot from 'features'.
+            top_weights_to_plot (int, optional): Number of top weights to plot. Defaults to 5.
+
+        Returns:
+            None
+        """
+        df_to_plot = self.get_data_on_features(feature)
+
+        # Plot synth control results
+        fig1 = go.Figure()
+        fig1.add_trace(
+            go.Scatter(
+                x=df_to_plot["date"],
+                y=df_to_plot["real"],
+                mode="lines",
+                name=self.treated_unit,
+            )
+        )
+        fig1.add_trace(
+            go.Scatter(
+                x=df_to_plot["date"],
+                y=df_to_plot["synthetic"],
+                mode="lines",
+                name="Synthetic Control",
+            )
+        )
+        fig1.add_vline(
+            # plotly non-ironic bug))
+            x=self.treatment_date.timestamp() * 1000,
+            line=dict(dash="dash"),
+            annotation_text="Treatment date",
+        )
+        title_addition = (
+            "using matching" if self.control_group_via_matching else "directly"
+        )
+        fig1.update_layout(
+            title=f"Synthetic Control for unit {self.treated_unit}.<br>Control group is set {title_addition}.<br>Fit error {self.model.loss_func} = {self.model.get_loss_value()}",
+            xaxis_title="Date",
+            yaxis_title=feature,
+            legend_title="Legend",
+            font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+        )
+
+        # Plot fitting weights distribution
+        weights = self.model.get_weights()
+        top_weights_values = sorted(
+            sorted(weights)[-top_weights_to_plot:], reverse=True
+        )
+        top_weights_values = [str(round(x, 4)) for x in top_weights_values]
+
+        fig2 = px.histogram(
+            x=weights,
+            nbins=int(len(weights) / 3),
+            title=f"Top {top_weights_to_plot} weights: {'. '.join(top_weights_values)}",
+        )
+        fig2.update_layout(
+            xaxis_title="Weights",
+            yaxis_title="Frequency",
+            legend_title="Legend",
+            font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+        )
+
+        # Show plots
+        fig1.show()
+        fig2.show()
