@@ -6,16 +6,18 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from loguru import logger
 from matplotlib import style
-from sklearn.preprocessing import StandardScaler
 
+from cib_advanced_experiments.matching import select_control_group_by_features
 from cib_advanced_experiments.model import SynthControlModel
 from cib_advanced_experiments.preprocessing import (
     _validate_aggregation,
     _validate_frequency,
     build_synthetic_control_matrices,
     prepare_panel_data,
+)
+from cib_advanced_experiments.propensity_score_matching import (
+    select_control_group_by_propensity_from_panel,
 )
 
 warnings.filterwarnings(action="ignore", category=DeprecationWarning)
@@ -85,6 +87,10 @@ class SyntheticControl:
         number_of_units_for_matching: int = None,
         categorical_matching: List[str] = None,
         numeric_matching: List[str] = None,
+        matching_method: Literal["feature", "propensity"] = "feature",
+        propensity_covariates: List[str] = None,
+        propensity_caliper: float = None,
+        propensity_random_state: int = 42,
         date_frequency: Literal["D", "W", "M", "Y"] = "D",
         aggregation_statistic: Literal["sum", "mean", "max", "min"] = "mean",
         **kwargs,
@@ -107,6 +113,10 @@ class SyntheticControl:
             number_of_units_for_matching=number_of_units_for_matching,
             categorical_matching=categorical_matching,
             numeric_matching=numeric_matching,
+            matching_method=matching_method,
+            propensity_covariates=propensity_covariates,
+            propensity_caliper=propensity_caliper,
+            propensity_random_state=propensity_random_state,
         )
         self.__prepare_panel_and_matrices()
         self.__aggregate_data()
@@ -160,6 +170,10 @@ class SyntheticControl:
         number_of_units_for_matching: Union[int, None] = None,
         categorical_matching: List[str] = None,
         numeric_matching: List[str] = None,
+        matching_method: Literal["feature", "propensity"] = "feature",
+        propensity_covariates: List[str] = None,
+        propensity_caliper: float = None,
+        propensity_random_state: int = 42,
     ) -> None:
         """
         Get only the given ids from the dataframe, if given.
@@ -183,15 +197,37 @@ class SyntheticControl:
             assert (
                 number_of_units_for_matching
             ), "Set 'number_of_units_for_matching' variable to some integer value, if you do not want to use matching set the 'control_group' directly."
-            assert (
-                categorical_matching or numeric_matching
-            ), "Set either 'categorical_matching' or 'numeric_matching' for automatic matching."
-
-            control_group = self.__matching(
-                categorical_matching=categorical_matching,
-                numeric_matching=numeric_matching,
-                number_of_units_for_matching=number_of_units_for_matching,
-            )
+            if matching_method == "feature":
+                assert (
+                    categorical_matching or numeric_matching
+                ), "Set either 'categorical_matching' or 'numeric_matching' for feature matching."
+                matching_result = select_control_group_by_features(
+                    data=self.data,
+                    unit_column=self.unit_column,
+                    date_column=self.date_column,
+                    treated_unit=self.treated_unit,
+                    treatment_date=self.treatment_date,
+                    number_of_units=number_of_units_for_matching,
+                    categorical_features=categorical_matching,
+                    numeric_features=numeric_matching,
+                )
+            elif matching_method == "propensity":
+                matching_result = select_control_group_by_propensity_from_panel(
+                    data=self.data,
+                    unit_column=self.unit_column,
+                    date_column=self.date_column,
+                    treated_unit=self.treated_unit,
+                    treatment_date=self.treatment_date,
+                    covariates=propensity_covariates,
+                    number_of_controls=number_of_units_for_matching,
+                    caliper=propensity_caliper,
+                    random_state=propensity_random_state,
+                )
+            else:
+                raise ValueError(
+                    f"Unknown matching_method='{matching_method}'. Use 'feature' or 'propensity'."
+                )
+            control_group = matching_result.control_group
             self.control_group_via_matching = True
         else:
             self.control_group_via_matching = False
@@ -208,117 +244,6 @@ class SyntheticControl:
             self.data[self.unit_column].isin(control_group + [self.treated_unit])
         ].copy()
         self.control_group = control_group
-
-    def __validate_matching_features(
-        self, categorical_matching: List[str], numeric_matching: List[str]
-    ):
-        if categorical_matching is None:
-            categorical_matching = []
-        if numeric_matching is None:
-            numeric_matching = []
-
-        missing_exact = set(categorical_matching) - set(self.data.columns)
-        missing_numeric = set(numeric_matching) - set(self.data.columns)
-        if missing_exact:
-            raise ValueError(f"Exact matching columns not found: {missing_exact}")
-        if missing_numeric:
-            raise ValueError(f"Numeric matching columns not found: {missing_numeric}")
-
-        for col in numeric_matching:
-            if not pd.api.types.is_numeric_dtype(self.data[col]):
-                raise ValueError(f"Column '{col}' is not numeric")
-
-    def __matching(
-        self,
-        categorical_matching: List[str],
-        numeric_matching: List[str],
-        number_of_units_for_matching: int,
-    ) -> List[str]:
-        """
-        Matches clients that exactly match on `categorical_matching` features and are closest by `numeric_matching` features
-        """
-        self.__validate_matching_features(
-            categorical_matching=categorical_matching, numeric_matching=numeric_matching
-        )
-
-        pre_treatment_data = self.data[
-            self.data[self.date_column] < self.treatment_date
-        ]
-
-        treated_unit_data = pre_treatment_data[
-            pre_treatment_data[self.unit_column] == self.treated_unit
-        ]
-        if treated_unit_data.empty:
-            raise ValueError(
-                f"No pre-treatment data for treated unit {self.treated_unit}"
-            )
-
-        # Exact matching
-        control_candidates = pre_treatment_data
-        if categorical_matching:
-            treated_categorical_values = {
-                feature: treated_unit_data.iloc[0][feature]
-                for feature in categorical_matching
-            }
-
-            mask = control_candidates[categorical_matching].apply(
-                lambda row: all(
-                    row[feature] == treated_categorical_values[feature]
-                    for feature in categorical_matching
-                ),
-                axis=1,
-            )
-            control_candidates = control_candidates[mask]
-
-        # If no exact match is found, use fallback
-        if control_candidates.empty:
-            logger.warning(
-                "No candidates after exact matching. Using all candidates for numeric matching."
-            )
-            control_candidates = pre_treatment_data[
-                pre_treatment_data[self.unit_column] != self.treated_unit
-            ]
-
-        if control_candidates.empty:
-            raise ValueError("No control candidates available after fallback.")
-
-        # If numeric metrics are available, compute Euclidean distance
-        if numeric_matching:
-            control_means = (
-                control_candidates.groupby(self.unit_column)[numeric_matching]
-                .mean()
-                .reset_index()
-            )
-            treated_means = (
-                treated_unit_data[numeric_matching].mean().values.reshape(1, -1)
-            )
-
-            # Normalize
-            numeric_data = control_means[numeric_matching].values
-            # Fit and transform data with the same Scaler
-            scaler = StandardScaler()
-            numeric_data_scaled = scaler.fit_transform(numeric_data)
-            treated_means_scaled = scaler.transform(treated_means)
-
-            control_means["distance"] = np.linalg.norm(
-                numeric_data_scaled - treated_means_scaled, axis=1
-            )
-            closest = (
-                control_means.nsmallest(number_of_units_for_matching, "distance")[
-                    self.unit_column
-                ]
-                .astype(str)
-                .tolist()
-            )
-        else:
-            # If no numeric metrics are available, take the first N results after exact match
-            closest = (
-                control_candidates[self.unit_column]
-                .unique()
-                .tolist()[:number_of_units_for_matching]
-            )
-
-        return closest
 
     def __handle_dates(
         self,
