@@ -11,6 +11,12 @@ from matplotlib import style
 from sklearn.preprocessing import StandardScaler
 
 from cib_advanced_experiments.model import SynthControlModel
+from cib_advanced_experiments.preprocessing import (
+    _validate_aggregation,
+    _validate_frequency,
+    build_synthetic_control_matrices,
+    prepare_panel_data,
+)
 
 warnings.filterwarnings(action="ignore", category=DeprecationWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -90,6 +96,8 @@ class SyntheticControl:
             unit_column=unit_column, date_column=date_column, features=features
         )
         self.__check_if_treated_unit_is_in_dataframe(treated_unit=treated_unit)
+        self.__init_data_frequency(date_frequency=date_frequency)
+        self.__init_aggregation_statistic(aggregation_statistic=aggregation_statistic)
         self.__handle_dates(
             min_date=min_date, max_date=max_date, treatment_date=treatment_date
         )
@@ -100,11 +108,7 @@ class SyntheticControl:
             categorical_matching=categorical_matching,
             numeric_matching=numeric_matching,
         )
-
-        self.__init_data_frequency(date_frequency=date_frequency)
-        self.__init_aggregation_statistic(aggregation_statistic=aggregation_statistic)
-        self.__upsample_events_dataframe()
-        self.__add_boolean_columns_of_treatment_unit_and_treatment_date()
+        self.__prepare_panel_and_matrices()
         self.__aggregate_data()
         self.__init_model(kwargs)
 
@@ -132,11 +136,6 @@ class SyntheticControl:
         self.date_column = date_column
         self.data[self.date_column] = pd.to_datetime(self.data[self.date_column])
         self.features = features
-        # Check that dataframe has equal number of dots for every unit
-        assert (
-            self.data[self.unit_column].value_counts().reset_index()["count"].nunique()
-            == 1
-        ), f"Check that for every {self.unit_column} there is equal number of rows in DataFrame, for equal dates"
 
     def __check_if_treated_unit_is_in_dataframe(
         self, treated_unit: Union[str, int]
@@ -351,44 +350,19 @@ class SyntheticControl:
         ), f"treatment_date should be between min_date and max_date. {treatment_date=}, {self.min_date=}, {self.max_date=}"
         self.treatment_date = treatment_date
 
-    def __upsample_events_dataframe(self) -> None:
-        """
-        For synth control we need to have a row for each unit for each date.
-        Add dummy zero events to ensure consistent size required for synth control
-
-        Returns:
-            None
-        """
-        aggregations_dict = {}
-        for column in self.features:
-            # TODO: Make a multiple choice of metrics to look for.
-            aggregations_dict[column] = self.aggregation_statistic
-        # Ranging by WORKING(monday - friday) days
-        dates = pd.date_range(self.min_date, self.max_date, freq=self.date_frequency)
-        users = self.data[self.unit_column].unique()
-        idx = pd.MultiIndex.from_product(
-            (users, dates), names=[self.unit_column, self.date_column]
+    def __prepare_panel_and_matrices(self) -> None:
+        """Build balanced panel and synthetic-control matrices with shared preprocessing."""
+        self.data = prepare_panel_data(
+            data=self.data,
+            unit_column=self.unit_column,
+            date_column=self.date_column,
+            value_columns=self.features,
+            min_date=self.min_date,
+            max_date=self.max_date,
+            date_frequency=self.date_frequency,
+            aggregation_statistic=self.aggregation_statistic,
+            fill_value=0.0,
         )
-        self.data = (
-            self.data.groupby(
-                [
-                    self.unit_column,
-                    pd.Grouper(key=self.date_column, freq=self.date_frequency),
-                ]
-            )
-            .agg(aggregations_dict)
-            .reindex(idx, fill_value=0.0)
-        ).reset_index()
-
-    def __add_boolean_columns_of_treatment_unit_and_treatment_date(self) -> None:
-        """
-        Just for having an opportunity to filter vectorized dataframe.
-
-        Returns:
-            None
-        """
-        self.data["is_treated"] = self.data[self.unit_column] == self.treated_unit
-        self.data["after_treatment"] = self.data[self.date_column] > self.treatment_date
 
     def __init_data_frequency(
         self, date_frequency: Literal["D", "W", "M", "Y"]
@@ -402,10 +376,7 @@ class SyntheticControl:
         Returns:
             None
         """
-        possible_frequencies = ["D", "W", "M", "Y"]
-        assert (
-            date_frequency in possible_frequencies
-        ), f"Select frequency from {possible_frequencies}"
+        _validate_frequency(date_frequency)
         self.date_frequency = date_frequency
 
     def __init_aggregation_statistic(
@@ -417,10 +388,7 @@ class SyntheticControl:
         Args:
             aggregation_statistic (Literal["sum", "mean", "max", "min"]): Aggregation statistic.
         """
-        possible_statistics = ["sum", "mean", "max", "min"]
-        assert (
-            aggregation_statistic in possible_statistics
-        ), f"Select statistic from {possible_statistics}"
+        _validate_aggregation(aggregation_statistic)
         self.aggregation_statistic = aggregation_statistic
 
     def __filter_data_by_date(self) -> None:
@@ -442,18 +410,19 @@ class SyntheticControl:
         Returns:
             None
         """
-        self.data = self.data.sort_values(self.date_column)
-        self.all_dates = self.data.query("is_treated")[self.date_column]
-        self.all_dates.index = list(range(1, len(self.all_dates) + 1))
-        self.processed_data = (
-            self.data.query("~after_treatment")
-            .pivot(index=self.unit_column, columns=self.date_column)[self.features]
-            .T.fillna(0.0)
+        matrices = build_synthetic_control_matrices(
+            panel_data=self.data,
+            unit_column=self.unit_column,
+            date_column=self.date_column,
+            features=self.features,
+            treated_unit=self.treated_unit,
+            treatment_date=self.treatment_date,
         )
-
-        # Get X and y for fitting model
-        self.__y = self.processed_data[self.treated_unit].values
-        self.__X = self.processed_data.drop(columns=self.treated_unit).values
+        self.data = matrices["prepared_data"]
+        self.processed_data = matrices["processed_data"]
+        self.all_dates = matrices["all_dates"]
+        self.__X = matrices["X"]
+        self.__y = matrices["y"]
 
     def __init_model(self, kwargs):
         """
