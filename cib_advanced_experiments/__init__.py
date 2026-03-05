@@ -9,7 +9,11 @@ from cib_advanced_experiments.conformal_inference import (
     conformal_residuals,
     conformal_test_statistic,
 )
-from cib_advanced_experiments.experiment import Experiment
+from cib_advanced_experiments.experiment import (
+    Experiment,
+    ExperimentResult,
+    FittedSyntheticControlResult,
+)
 from cib_advanced_experiments.matching import MatchingResult, select_control_group_by_features
 from cib_advanced_experiments.model import SynthControlModel
 from cib_advanced_experiments.preprocessing import (
@@ -47,6 +51,8 @@ __all__ = [
     "conformal_test_statistic",
     "ConformalFrame",
     "Experiment",
+    "ExperimentResult",
+    "FittedSyntheticControlResult",
     "MatchingResult",
     "PropensityScoreMatchingResult",
     "prepare_panel_data",

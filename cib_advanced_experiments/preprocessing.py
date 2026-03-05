@@ -53,7 +53,7 @@ def _validate_frequency(date_frequency: DateFrequency) -> None:
     Returns:
         None
     """
-    possible_frequencies = {"D", "W", "M", "Y"}
+    possible_frequencies = {"D", "W", "M", "YE"}
     if date_frequency not in possible_frequencies:
         raise ValueError(
             f"Select date_frequency from {sorted(possible_frequencies)}; got '{date_frequency}'."
