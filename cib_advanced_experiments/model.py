@@ -123,7 +123,7 @@ class SynthControlModel(torch.nn.Module):
             loss.backward()
             self.optimizer.step()
         self.__weights = torch.softmax(
-            list(self.parameters())[0].T.detach(), dim=-1
+            list(self.parameters())[0].detach(), dim=-1
         ).cpu().numpy()
         self.__loss_value = loss.detach().cpu().numpy()
 
