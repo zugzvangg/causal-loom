@@ -124,5 +124,35 @@ def test_synthetic_control_can_switch_to_propensity_matching():
     weights = sc.get_weights()
     assert weights.shape == (10,)
     assert np.isclose(weights.sum(), 1.0, atol=1e-5)
-    assert weights.shape == (10,)
-    assert np.isclose(weights.sum(), 1.0, atol=1e-5)
+
+
+def test_synthetic_control_get_effect_data_contains_effect_column():
+    rng = np.random.default_rng(17)
+    dates = pd.date_range("2024-01-01", periods=8, freq="D")
+    units = [f"u{i}" for i in range(12)]
+    rows = []
+    for idx, unit in enumerate(units):
+        for date in dates:
+            rows.append(
+                {
+                    "unit": unit,
+                    "date": date,
+                    "y": 3.0 + idx * 0.2 + rng.normal(0.0, 0.05),
+                }
+            )
+    data = pd.DataFrame(rows)
+
+    sc = SyntheticControl(
+        data=data,
+        unit_column="unit",
+        date_column="date",
+        features=["y"],
+        treated_unit="u0",
+        treatment_date="2024-01-06",
+        control_group=[f"u{i}" for i in range(1, 11)],
+        epochs=5,
+        lr=0.01,
+    )
+    sc.fit()
+    effect_data = sc.get_effect_data("y")
+    assert {"date", "real", "synthetic", "effect"}.issubset(effect_data.columns)
