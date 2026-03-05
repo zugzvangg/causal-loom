@@ -1,16 +1,16 @@
 import datetime
 from typing import List, Literal, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 from loguru import logger
-from plotly.subplots import make_subplots
 from scipy import stats
 from tqdm import tqdm
 
 from cib_advanced_experiments.synthetic_control import SyntheticControl
+from cib_advanced_experiments.visualization import (
+    create_experiment_distributions_figure,
+)
 
 
 class Experiment:
@@ -151,8 +151,7 @@ class Experiment:
             )
             synthetic_control.fit()
             if to_plot:
-                fig = synthetic_control.plot_results(feature, top_weights_to_plot)
-                plt.show()
+                synthetic_control.plot_results(feature, top_weights_to_plot)
 
             resulting_synthetic_controls.append(synthetic_control)
         self.resulting_synthetic_controls = resulting_synthetic_controls
@@ -247,110 +246,12 @@ class Experiment:
         logger.info(f"T-tests result: {ttest=}")
         logger.info("-" * 20)
 
-        # Create subplots
-        fig = make_subplots(
-            rows=1,
-            cols=2,
-            subplot_titles=(
-                "Synthetic vs Real values Distribution",
-                "Fit Errors Distribution",
-            ),
+        fig = create_experiment_distributions_figure(
+            real=real,
+            synthetic=synthetic,
+            fit_errors=fit_errors,
+            border_quantile=border_quantile,
         )
-
-        # Add histograms to the first subplot
-        fig.add_trace(
-            go.Histogram(
-                x=real,
-                nbinsx=int(len(real) / 2),
-                opacity=0.75,
-                name="Real values <br>Distribution <br>and mean value",
-            ),
-            row=1,
-            col=1,
-        )
-        fig.add_trace(
-            go.Histogram(
-                x=synthetic,
-                nbinsx=int(len(synthetic) / 2),
-                opacity=0.75,
-                name="Synthetic values <br>Distribution <br>and mean value",
-            ),
-            row=1,
-            col=1,
-        )
-
-        fig.add_shape(
-            type="line",
-            x0=np.mean(synthetic),
-            y0=0,
-            x1=np.mean(synthetic),
-            y1=10,
-            xref="x",
-            yref="paper",
-            line=dict(
-                color="Red",
-                width=2,
-                dash="dashdot",
-            ),
-            row=1,
-            col=1,
-        )
-        fig.add_shape(
-            type="line",
-            x0=np.mean(real),
-            y0=0,
-            x1=np.mean(real),
-            y1=10,
-            xref="x",
-            yref="paper",
-            line=dict(
-                color="Blue",
-                width=2,
-                dash="dashdot",
-            ),
-            row=1,
-            col=1,
-        )
-
-        # Add histogram to the second subplot
-        fig.add_trace(
-            go.Histogram(
-                x=fit_errors,
-                nbinsx=int(len(fit_errors) / 2),
-                opacity=1,
-                name="Fit Errors <br>Distribution <br>and fit border quantile",
-            ),
-            row=1,
-            col=2,
-        )
-
-        fig.add_shape(
-            type="line",
-            x0=border_quantile,
-            y0=0,
-            x1=border_quantile,
-            y1=10,
-            xref="x",
-            yref="paper",
-            line=dict(
-                color="Green",
-                width=2,
-                dash="dashdot",
-            ),
-            row=1,
-            col=2,
-        )
-
-        # Update layout
-        fig.update_layout(
-            title_text="Distributions",
-            showlegend=True,
-            bargap=0.1,
-            width=1200,
-            height=600,
-            font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
-        )
-
         fig.show()
 
         self.mean_synthetic = mean_synthetic

@@ -15,6 +15,11 @@ from cib_advanced_experiments.propensity_score_matching import (
     select_control_group_by_propensity_from_panel,
 )
 from cib_advanced_experiments.synthetic_control import SyntheticControl
+from cib_advanced_experiments.visualization import (
+    create_experiment_distributions_figure,
+    create_synthetic_control_series_figure,
+    create_synthetic_control_weights_figure,
+)
 
 
 __all__ = [
@@ -28,6 +33,9 @@ __all__ = [
     "propensity_score_match",
     "select_control_group_by_propensity_from_panel",
     "select_control_group_by_features",
+    "create_experiment_distributions_figure",
+    "create_synthetic_control_series_figure",
+    "create_synthetic_control_weights_figure",
     "SynthControlModel",
     "SyntheticControl",
 ]

@@ -4,8 +4,6 @@ from typing import List, Literal, Union
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 from matplotlib import style
 
 from cib_advanced_experiments.matching import select_control_group_by_features
@@ -18,6 +16,10 @@ from cib_advanced_experiments.preprocessing import (
 )
 from cib_advanced_experiments.propensity_score_matching import (
     select_control_group_by_propensity_from_panel,
+)
+from cib_advanced_experiments.visualization import (
+    create_synthetic_control_series_figure,
+    create_synthetic_control_weights_figure,
 )
 
 warnings.filterwarnings(action="ignore", category=DeprecationWarning)
@@ -430,60 +432,21 @@ class SyntheticControl:
         """
         df_to_plot = self.get_data_on_features(feature)
 
-        # Plot synth control results
-        fig1 = go.Figure()
-        fig1.add_trace(
-            go.Scatter(
-                x=df_to_plot["date"],
-                y=df_to_plot["real"],
-                mode="lines",
-                name=self.treated_unit,
-            )
-        )
-        fig1.add_trace(
-            go.Scatter(
-                x=df_to_plot["date"],
-                y=df_to_plot["synthetic"],
-                mode="lines",
-                name="Synthetic Control",
-            )
-        )
-        fig1.add_vline(
-            # plotly non-ironic bug))
-            x=self.treatment_date.timestamp() * 1000,
-            line=dict(dash="dash"),
-            annotation_text="Treatment date",
-        )
-        title_addition = (
-            "using matching" if self.control_group_via_matching else "directly"
-        )
-        fig1.update_layout(
-            title=f"Synthetic Control for unit {self.treated_unit}.<br>Control group is set {title_addition}.<br>Fit error {self.model.loss_func} = {self.model.get_loss_value()}",
-            xaxis_title="Date",
-            yaxis_title=feature,
-            legend_title="Legend",
-            font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+        fig1 = create_synthetic_control_series_figure(
+            df_to_plot=df_to_plot,
+            treated_unit=self.treated_unit,
+            treatment_date=self.treatment_date,
+            feature=feature,
+            control_group_via_matching=self.control_group_via_matching,
+            loss_func=self.model.loss_func,
+            fit_error=self.model.get_loss_value(),
         )
 
-        # Plot fitting weights distribution
         weights = self.model.get_weights()
-        top_weights_values = sorted(
-            sorted(weights)[-top_weights_to_plot:], reverse=True
-        )
-        top_weights_values = [str(round(x, 4)) for x in top_weights_values]
-
-        fig2 = px.histogram(
-            x=weights,
-            nbins=int(len(weights) / 3),
-            title=f"Top {top_weights_to_plot} weights: {'. '.join(top_weights_values)}",
-        )
-        fig2.update_layout(
-            xaxis_title="Weights",
-            yaxis_title="Frequency",
-            legend_title="Legend",
-            font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+        fig2 = create_synthetic_control_weights_figure(
+            weights=weights,
+            top_weights_to_plot=top_weights_to_plot,
         )
 
-        # Show plots
         fig1.show()
         fig2.show()
