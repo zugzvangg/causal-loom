@@ -9,6 +9,14 @@ from sklearn.linear_model import LogisticRegression
 
 @dataclass(frozen=True)
 class PropensityScoreMatchingResult:
+    """Result object for propensity-score based control selection.
+
+    Attributes:
+        treated_unit (str): Treated unit identifier.
+        control_group (List[str]): Selected control unit identifiers.
+        scores (pd.DataFrame): Unit-level propensity scores.
+    """
+
     treated_unit: str
     control_group: List[str]
     scores: pd.DataFrame
@@ -20,6 +28,17 @@ def _validate_psm_inputs(
     treatment_column: str,
     covariates: List[str],
 ) -> None:
+    """Validate required columns and binary treatment target.
+
+    Args:
+        data (pd.DataFrame): Source dataframe.
+        unit_column (str): Unit identifier column.
+        treatment_column (str): Binary treatment indicator column.
+        covariates (List[str]): Covariates used for propensity model.
+
+    Returns:
+        None
+    """
     required_columns = [unit_column, treatment_column] + covariates
     missing = [column for column in required_columns if column not in data.columns]
     if missing:
@@ -38,7 +57,21 @@ def propensity_score_match(
     caliper: float = None,
     random_state: int = 42,
 ) -> PropensityScoreMatchingResult:
-    """Find nearest controls for one treated unit by propensity score distance."""
+    """Select nearest controls by propensity score distance.
+
+    Args:
+        data (pd.DataFrame): Input dataframe at matching granularity.
+        unit_column (str): Unit identifier column.
+        treatment_column (str): Binary treatment indicator column.
+        covariates (List[str]): Numeric covariates for logistic model.
+        treated_unit (str): Treated unit identifier.
+        number_of_controls (int): Number of controls to select.
+        caliper (float, optional): Max allowed score distance.
+        random_state (int, optional): Random seed for logistic model.
+
+    Returns:
+        PropensityScoreMatchingResult: Matching result and estimated scores.
+    """
     if number_of_controls <= 0:
         raise ValueError(
             f"number_of_controls should be positive; got {number_of_controls}."
@@ -115,7 +148,22 @@ def select_control_group_by_propensity_from_panel(
     caliper: float = None,
     random_state: int = 42,
 ) -> PropensityScoreMatchingResult:
-    """Match controls for a treated unit using propensity scores on pre-treatment unit-level covariates."""
+    """Run propensity matching on pre-treatment panel aggregates.
+
+    Args:
+        data (pd.DataFrame): Panel dataframe.
+        unit_column (str): Unit identifier column.
+        date_column (str): Date column.
+        treated_unit (Union[str, int]): Treated unit identifier.
+        treatment_date (Union[str, datetime.datetime]): Treatment date.
+        covariates (List[str]): Numeric covariates for propensity model.
+        number_of_controls (int): Number of controls to select.
+        caliper (float, optional): Max allowed score distance.
+        random_state (int, optional): Random seed for logistic model.
+
+    Returns:
+        PropensityScoreMatchingResult: Matching result based on pre-period unit summaries.
+    """
     covariates = covariates or []
     if not covariates:
         raise ValueError("Pass 'propensity_covariates' for propensity matching.")

@@ -14,6 +14,22 @@ from cib_advanced_experiments.visualization import (
 
 
 class Experiment:
+    """Run multiple synthetic-control fits and aggregate experiment-level inference.
+
+    Args:
+        data (pd.DataFrame): Source panel data.
+        treatments_dataframe (pd.DataFrame): Table with treated units and treatment dates.
+        unit_column (str): Unit identifier column name.
+        date_column (str): Date column name.
+        features (List[str]): Features/outcomes available for modeling.
+        treatment_date_column (str): Treatment date column in treatments_dataframe.
+        min_date (Union[str, datetime.datetime], optional): Lower date bound.
+        max_date (Union[str, datetime.datetime], optional): Upper date bound.
+        date_frequency (Literal["D", "W", "M", "Y"], optional): Aggregation frequency.
+        aggregation_statistic (Literal["sum", "mean", "max", "min"], optional): Aggregation operation.
+        cuped_enabled (bool, optional): Whether to apply CUPED adjustment.
+    """
+
     def __init__(
         self,
         data: pd.DataFrame,
@@ -61,8 +77,10 @@ class Experiment:
         self.cuped_enabled = cuped_enabled
 
     def __validate_treatments_dataframe(self):
-        """
-        Just validates that given dataframe with treatment dates is OK.
+        """Validate treatments dataframe schema.
+
+        Returns:
+            None
         """
         treatments_dataframe_axis = self.treatments_dataframe.columns.values
         assert (
@@ -279,6 +297,11 @@ class Experiment:
         return ttest
 
     def get_metrics(self) -> dict[str, Union[float, tuple[float, float]]]:
+        """Return aggregated experiment metrics from the latest run.
+
+        Returns:
+            dict[str, Union[float, tuple[float, float]]]: Summary metrics including t-test values.
+        """
         metrics = {
             "mean_synthetic": self.mean_synthetic,
             "mean_real": self.mean_real,

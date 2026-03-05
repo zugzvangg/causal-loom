@@ -9,6 +9,15 @@ from sklearn.preprocessing import StandardScaler
 
 @dataclass(frozen=True)
 class MatchingResult:
+    """Result object for feature-based control selection.
+
+    Attributes:
+        control_group (List[str]): Selected control unit identifiers.
+        candidate_count (int): Number of candidate controls before final truncation.
+        used_exact_matching (bool): Whether categorical exact matching was applied.
+        used_numeric_matching (bool): Whether distance-based numeric matching was applied.
+    """
+
     control_group: List[str]
     candidate_count: int
     used_exact_matching: bool
@@ -20,6 +29,16 @@ def _validate_matching_columns(
     categorical_features: List[str],
     numeric_features: List[str],
 ) -> None:
+    """Validate feature-matching column presence and numeric dtypes.
+
+    Args:
+        data (pd.DataFrame): Source dataframe.
+        categorical_features (List[str]): Categorical exact-match features.
+        numeric_features (List[str]): Numeric distance-match features.
+
+    Returns:
+        None
+    """
     categorical_features = categorical_features or []
     numeric_features = numeric_features or []
 
@@ -48,7 +67,22 @@ def select_control_group_by_features(
     numeric_features: List[str] = None,
     fallback_to_all_candidates: bool = True,
 ) -> MatchingResult:
-    """Match controls by exact categorical rules and distance in numeric features."""
+    """Select control units using feature-based matching.
+
+    Args:
+        data (pd.DataFrame): Source dataframe.
+        unit_column (str): Unit identifier column.
+        date_column (str): Date column.
+        treated_unit (Union[str, int]): Treated unit identifier.
+        treatment_date (Union[str, datetime.datetime]): Treatment date.
+        number_of_units (int): Number of controls to select.
+        categorical_features (List[str], optional): Exact-matching categorical features.
+        numeric_features (List[str], optional): Numeric features for distance ranking.
+        fallback_to_all_candidates (bool, optional): Fallback to all candidates if exact match is empty.
+
+    Returns:
+        MatchingResult: Selected controls and matching metadata.
+    """
     if number_of_units <= 0:
         raise ValueError(f"number_of_units should be positive; got {number_of_units}.")
 

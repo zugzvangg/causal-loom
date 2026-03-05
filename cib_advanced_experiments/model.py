@@ -131,6 +131,9 @@ class SynthControlModel(torch.nn.Module):
         """
         Get the weights of the model.
 
+        Args:
+            None
+
         Returns:
             np.ndarray: Array of weights of shape (K,) where K is the number of features.
         """
@@ -139,6 +142,9 @@ class SynthControlModel(torch.nn.Module):
     def get_loss_value(self) -> float:
         """
         Get the loss value after fitting the model.
+
+        Args:
+            None
 
         Returns:
             float: Loss value of the model.

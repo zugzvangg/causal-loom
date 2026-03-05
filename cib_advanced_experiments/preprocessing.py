@@ -12,7 +12,15 @@ DateFrequency = Literal["D", "W", "M", "Y"]
 
 @dataclass(frozen=True)
 class ConformalFrame:
-    """Prepared panel blocks for conformal inference on Synthetic Control."""
+    """Prepared panel blocks for conformal inference on Synthetic Control.
+
+    Attributes:
+        pre_treatment_treated (np.ndarray): Treated-unit outcomes before treatment.
+        post_treatment_treated (np.ndarray): Treated-unit outcomes after treatment.
+        pre_treatment_controls (pd.DataFrame): Control outcomes before treatment in wide form.
+        post_treatment_controls (pd.DataFrame): Control outcomes after treatment in wide form.
+        panel (pd.DataFrame): Original prepared panel dataframe.
+    """
 
     pre_treatment_treated: np.ndarray
     post_treatment_treated: np.ndarray
@@ -22,12 +30,29 @@ class ConformalFrame:
 
 
 def _ensure_columns(data: pd.DataFrame, columns: List[str]) -> None:
+    """Raise ValueError if required columns are missing.
+
+    Args:
+        data (pd.DataFrame): Input dataframe.
+        columns (List[str]): Required column names.
+
+    Returns:
+        None
+    """
     missing = [column for column in columns if column not in data.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
 
 def _validate_frequency(date_frequency: DateFrequency) -> None:
+    """Validate allowed panel resampling frequency.
+
+    Args:
+        date_frequency (DateFrequency): Requested resampling frequency.
+
+    Returns:
+        None
+    """
     possible_frequencies = {"D", "W", "M", "Y"}
     if date_frequency not in possible_frequencies:
         raise ValueError(
@@ -36,6 +61,14 @@ def _validate_frequency(date_frequency: DateFrequency) -> None:
 
 
 def _validate_aggregation(aggregation_statistic: AggregationStatistic) -> None:
+    """Validate allowed aggregation statistic.
+
+    Args:
+        aggregation_statistic (AggregationStatistic): Aggregation operation.
+
+    Returns:
+        None
+    """
     possible_statistics = {"sum", "mean", "max", "min"}
     if aggregation_statistic not in possible_statistics:
         raise ValueError(
@@ -49,6 +82,17 @@ def _resolve_date_range(
     min_date: DateLike = None,
     max_date: DateLike = None,
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Resolve and validate min/max date boundaries.
+
+    Args:
+        data (pd.DataFrame): Input dataframe with date column.
+        date_column (str): Date column name.
+        min_date (DateLike, optional): Lower bound date.
+        max_date (DateLike, optional): Upper bound date.
+
+    Returns:
+        tuple[pd.Timestamp, pd.Timestamp]: Resolved min and max timestamps.
+    """
     resolved_min = pd.to_datetime(min_date) if min_date else data[date_column].min()
     resolved_max = pd.to_datetime(max_date) if max_date else data[date_column].max()
     if resolved_min >= resolved_max:
@@ -69,7 +113,22 @@ def prepare_panel_data(
     aggregation_statistic: AggregationStatistic = "mean",
     fill_value: float = 0.0,
 ) -> pd.DataFrame:
-    """Build a balanced panel for methods that need a row for each unit and each date."""
+    """Build a balanced panel with one row per unit/date.
+
+    Args:
+        data (pd.DataFrame): Source dataframe.
+        unit_column (str): Unit identifier column.
+        date_column (str): Date column.
+        value_columns (List[str]): Value columns to aggregate.
+        min_date (DateLike, optional): Lower bound date.
+        max_date (DateLike, optional): Upper bound date.
+        date_frequency (DateFrequency, optional): Resampling frequency.
+        aggregation_statistic (AggregationStatistic, optional): Aggregation operation.
+        fill_value (float, optional): Fill value for missing unit/date points.
+
+    Returns:
+        pd.DataFrame: Balanced panel dataframe.
+    """
     _ensure_columns(data, [unit_column, date_column] + value_columns)
     _validate_frequency(date_frequency)
     _validate_aggregation(aggregation_statistic)
@@ -117,7 +176,19 @@ def build_synthetic_control_matrices(
     treated_unit: Union[str, int],
     treatment_date: DateLike,
 ) -> dict[str, Union[np.ndarray, pd.DataFrame, List[str], pd.Series]]:
-    """Create X/y matrices and helper blocks used by Synthetic Control model fitting."""
+    """Create matrices and helper blocks for synthetic control fitting.
+
+    Args:
+        panel_data (pd.DataFrame): Balanced panel dataframe.
+        unit_column (str): Unit identifier column.
+        date_column (str): Date column.
+        features (List[str]): Outcome/features used in model.
+        treated_unit (Union[str, int]): Treated unit identifier.
+        treatment_date (DateLike): Treatment date.
+
+    Returns:
+        dict[str, Union[np.ndarray, pd.DataFrame, List[str], pd.Series]]: Prepared blocks.
+    """
     _ensure_columns(panel_data, [unit_column, date_column] + features)
     treated_unit = str(treated_unit)
     treatment_date = pd.to_datetime(treatment_date)
@@ -160,7 +231,19 @@ def build_conformal_frame(
     treated_unit: Union[str, int],
     treatment_date: DateLike,
 ) -> ConformalFrame:
-    """Prepare pre/post blocks for conformal inference on top of Synthetic Control."""
+    """Prepare pre/post blocks for conformal inference.
+
+    Args:
+        panel_data (pd.DataFrame): Panel dataframe.
+        unit_column (str): Unit identifier column.
+        date_column (str): Date column.
+        outcome_column (str): Outcome variable.
+        treated_unit (Union[str, int]): Treated unit identifier.
+        treatment_date (DateLike): Treatment date.
+
+    Returns:
+        ConformalFrame: Structured pre/post treated/control blocks.
+    """
     _ensure_columns(panel_data, [unit_column, date_column, outcome_column])
 
     treated_unit = str(treated_unit)
@@ -203,7 +286,19 @@ def prepare_rdd_data(
     covariates: List[str] = None,
     bandwidth: float = None,
 ) -> pd.DataFrame:
-    """Prepare dataset for sharp RDD (center running variable and derive treatment flag)."""
+    """Prepare dataset for sharp RDD analysis.
+
+    Args:
+        data (pd.DataFrame): Source dataframe.
+        outcome_column (str): Outcome variable.
+        running_column (str): Running/forcing variable.
+        cutoff (float): Treatment cutoff on running variable.
+        covariates (List[str], optional): Additional covariates.
+        bandwidth (float, optional): Optional symmetric bandwidth around cutoff.
+
+    Returns:
+        pd.DataFrame: Clean dataframe with centered running variable and treatment flag.
+    """
     covariates = covariates or []
     required_columns = [outcome_column, running_column] + covariates
     _ensure_columns(data, required_columns)
