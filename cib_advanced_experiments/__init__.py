@@ -1,5 +1,14 @@
 """Top-level package exports."""
 
+from cib_advanced_experiments.conformal_inference import (
+    conformal_confidence_interval,
+    conformal_confidence_interval_from_p_values,
+    conformal_p_value,
+    conformal_p_value_from_residuals,
+    conformal_p_value_grid_for_period,
+    conformal_residuals,
+    conformal_test_statistic,
+)
 from cib_advanced_experiments.experiment import Experiment
 from cib_advanced_experiments.matching import MatchingResult, select_control_group_by_features
 from cib_advanced_experiments.model import SynthControlModel
@@ -24,6 +33,13 @@ from cib_advanced_experiments.visualization import (
 
 __all__ = [
     "build_conformal_frame",
+    "conformal_confidence_interval",
+    "conformal_confidence_interval_from_p_values",
+    "conformal_p_value",
+    "conformal_p_value_from_residuals",
+    "conformal_p_value_grid_for_period",
+    "conformal_residuals",
+    "conformal_test_statistic",
     "ConformalFrame",
     "Experiment",
     "MatchingResult",
