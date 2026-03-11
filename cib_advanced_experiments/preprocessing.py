@@ -28,6 +28,8 @@ class ConformalFrame:
     post_treatment_controls: pd.DataFrame
     panel: pd.DataFrame
 
+# ====================== Synthetic Control ======================
+
 
 def _ensure_columns(data: pd.DataFrame, columns: List[str]) -> None:
     """Raise ValueError if required columns are missing.
@@ -222,6 +224,8 @@ def build_synthetic_control_matrices(
         "all_dates": all_dates,
     }
 
+# ====================== Confrormal ======================
+
 
 def build_conformal_frame(
     panel_data: pd.DataFrame,
@@ -277,6 +281,7 @@ def build_conformal_frame(
         panel=prepared,
     )
 
+# ====================== RDD ======================
 
 def prepare_rdd_data(
     data: pd.DataFrame,
