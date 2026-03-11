@@ -103,6 +103,40 @@ def test_experiment_fit_all_and_evaluate_split_api():
     assert result.test_name == "paired_ttest"
 
 
+def test_experiment_get_aggregated_series_after_fit_all():
+    data = _build_experiment_data(seed=107)
+    treatments = _build_treatments()
+    control_group = [f"u{i}" for i in range(2, 12)]
+
+    experiment = Experiment(
+        data=data,
+        treatments_dataframe=treatments,
+        unit_column="unit",
+        date_column="date",
+        features=["y"],
+        treatment_date_column="treatment_date",
+    )
+    fitted = experiment.fit_all(
+        feature="y",
+        to_plot=False,
+        control_group=control_group,
+        epochs=5,
+        lr=0.01,
+    )
+    aggregated = experiment.get_aggregated_series(feature="y", fitted_units=fitted)
+
+    assert {"date", "real", "synthetic", "effect"}.issubset(aggregated.columns)
+    assert len(aggregated) > 0
+
+    expected_last_real = np.mean(
+        [
+            f.synthetic_control.get_data_on_features("y").iloc[-1]["real"]
+            for f in fitted
+        ]
+    )
+    assert np.isclose(aggregated.iloc[-1]["real"], expected_last_real)
+
+
 def test_experiment_supports_permutation_inference():
     data = _build_experiment_data(seed=103)
     treatments = _build_treatments()

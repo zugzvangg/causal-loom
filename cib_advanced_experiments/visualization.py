@@ -246,6 +246,59 @@ def create_experiment_distributions_figure(
     return fig
 
 
+def create_experiment_aggregated_series_figure(
+    df_to_plot: pd.DataFrame,
+    feature: str,
+    treated_units_count: int,
+    treatment_date: pd.Timestamp | None = None,
+) -> go.Figure:
+    """Create mean real-vs-synthetic series across fitted treated units.
+
+    Args:
+        df_to_plot (pd.DataFrame): Dataframe with date, real, synthetic columns.
+        feature (str): Outcome name for axis title.
+        treated_units_count (int): Number of treated units included in the mean.
+        treatment_date (pd.Timestamp | None, optional): Common treatment date marker.
+
+    Returns:
+        go.Figure: Configured Plotly figure.
+    """
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=df_to_plot["date"],
+            y=df_to_plot["real"],
+            mode="lines",
+            name="Mean real",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df_to_plot["date"],
+            y=df_to_plot["synthetic"],
+            mode="lines",
+            name="Mean synthetic",
+        )
+    )
+    if treatment_date is not None:
+        fig.add_vline(
+            x=pd.to_datetime(treatment_date).timestamp() * 1000,
+            line=dict(dash="dash"),
+            annotation_text="Treatment date",
+        )
+    fig.update_layout(
+        title=(
+            "Mean Synthetic Control Across Treated Units.<br>"
+            f"Units included: {treated_units_count}"
+        ),
+        xaxis_title="Date",
+        yaxis_title=feature,
+        legend_title="Legend",
+        font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+    )
+    return fig
+
+
 def create_conformal_residuals_figure(
     residuals_df: pd.DataFrame,
     intervention_start: pd.Timestamp,

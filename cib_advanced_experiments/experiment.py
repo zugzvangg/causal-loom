@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from cib_advanced_experiments.synthetic_control import SyntheticControl
 from cib_advanced_experiments.visualization import (
+    create_experiment_aggregated_series_figure,
     create_experiment_distributions_figure,
 )
 
@@ -175,6 +176,7 @@ class Experiment:
         propensity_caliper: float = None,
         propensity_random_state: int = 42,
         to_plot: bool = True,
+        to_plot_aggregated: bool = False,
         raise_on_empty: bool = True,
         **kwargs,
     ) -> List[FittedSyntheticControlResult]:
@@ -191,6 +193,7 @@ class Experiment:
             propensity_caliper (float, optional): Propensity caliper.
             propensity_random_state (int, optional): Propensity model random state.
             to_plot (bool, optional): Whether to plot per-unit synthetic-control results.
+            to_plot_aggregated (bool, optional): Whether to plot aggregated mean real-vs-synthetic series after fitting all units.
             raise_on_empty (bool, optional): Raise error when no models were fitted.
             **kwargs: Additional parameters passed to SyntheticControl.
 
@@ -259,7 +262,98 @@ class Experiment:
                 "No synthetic controls were fitted. Check treatments_dataframe, "
                 "matching settings, and unit coverage in source data."
             )
+        if to_plot_aggregated and len(fitted_results) > 0:
+            self.plot_aggregated_results(feature=feature, fitted_units=fitted_results)
         return fitted_results
+
+    def get_aggregated_series(
+        self,
+        feature: str,
+        fitted_units: List[FittedSyntheticControlResult] = None,
+    ) -> pd.DataFrame:
+        """Build experiment-level mean time series across fitted treated units.
+
+        Args:
+            feature (str): Target feature to aggregate.
+            fitted_units (List[FittedSyntheticControlResult], optional): Explicit fitted results.
+                If None, uses the latest fitted controls stored in this Experiment.
+
+        Returns:
+            pd.DataFrame: Dataframe with date, real, synthetic and effect columns.
+        """
+        if feature not in self.features:
+            raise ValueError(f"{feature=} should be from {self.features=}")
+
+        if fitted_units is None:
+            if not self.resulting_synthetic_controls:
+                raise ValueError(
+                    "No fitted synthetic controls found. Run fit_all first or pass fitted_units."
+                )
+            synthetic_controls = self.resulting_synthetic_controls
+        else:
+            synthetic_controls = [f.synthetic_control for f in fitted_units]
+
+        if len(synthetic_controls) == 0:
+            raise ValueError("No fitted synthetic controls to aggregate.")
+
+        per_unit_frames = []
+        for synthetic_control in synthetic_controls:
+            unit_frame = synthetic_control.get_data_on_features(feature=feature).copy()
+            unit_frame["date"] = pd.to_datetime(unit_frame["date"])
+            per_unit_frames.append(unit_frame[["date", "real", "synthetic"]])
+
+        aggregated = (
+            pd.concat(per_unit_frames, ignore_index=True)
+            .groupby("date", as_index=False)[["real", "synthetic"]]
+            .mean()
+            .sort_values("date")
+        )
+        aggregated["effect"] = aggregated["real"] - aggregated["synthetic"]
+        return aggregated
+
+    def plot_aggregated_results(
+        self,
+        feature: str,
+        fitted_units: List[FittedSyntheticControlResult] = None,
+    ) -> None:
+        """Plot mean real-vs-synthetic trajectory across fitted treated units.
+
+        Args:
+            feature (str): Target feature to plot.
+            fitted_units (List[FittedSyntheticControlResult], optional): Explicit fitted results.
+                If None, uses the latest fitted controls stored in this Experiment.
+
+        Returns:
+            None
+        """
+        aggregated = self.get_aggregated_series(
+            feature=feature,
+            fitted_units=fitted_units,
+        )
+
+        if fitted_units is None:
+            synthetic_controls = self.resulting_synthetic_controls
+        else:
+            synthetic_controls = [f.synthetic_control for f in fitted_units]
+        treatment_dates = sorted(
+            {pd.to_datetime(sc.treatment_date) for sc in synthetic_controls}
+        )
+        treatment_date_for_marker = None
+        if len(treatment_dates) == 1:
+            treatment_date_for_marker = treatment_dates[0]
+        elif len(treatment_dates) > 1:
+            logger.warning(
+                "Multiple treatment dates detected across fitted units. "
+                "Aggregated plot is shown without a single treatment-date marker."
+            )
+
+        fig = create_experiment_aggregated_series_figure(
+            df_to_plot=aggregated,
+            feature=feature,
+            treated_units_count=len(synthetic_controls),
+            treatment_date=treatment_date_for_marker,
+        )
+        fig.show()
 
     def evaluate(
         self,
@@ -467,6 +561,7 @@ class Experiment:
         return_result: bool = True,
         to_plot: bool = True,
         to_plot_individual: bool = None,
+        to_plot_aggregated: bool = False,
         **kwargs,
     ) -> ExperimentResult | None:
         """Run full experiment pipeline: fit models, evaluate, and optionally plot.
@@ -492,6 +587,7 @@ class Experiment:
             return_result (bool, optional): Return ExperimentResult if True.
             to_plot (bool, optional): Plot final experiment-level distributions.
             to_plot_individual (bool, optional): Plot per-unit synthetic-control outputs. If None, equals to_plot.
+            to_plot_aggregated (bool, optional): Plot aggregated mean real-vs-synthetic series after fitting all units.
             **kwargs: Additional kwargs passed to SyntheticControl.
 
         Returns:
@@ -511,6 +607,7 @@ class Experiment:
             propensity_caliper=propensity_caliper,
             propensity_random_state=propensity_random_state,
             to_plot=to_plot_individual,
+            to_plot_aggregated=to_plot_aggregated,
             raise_on_empty=raise_on_empty,
             **kwargs,
         )
