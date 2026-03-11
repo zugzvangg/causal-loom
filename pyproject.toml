@@ -12,7 +12,6 @@ dependencies = [
     "plotly>=5.24.1",
     "scikit-learn>=1.6.1",
     "scipy>=1.15.1",
-    "torch>=2.5.1",
     "tqdm>=4.67.1",
 ]
 
