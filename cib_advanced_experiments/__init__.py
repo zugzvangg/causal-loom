@@ -28,9 +28,11 @@ from cib_advanced_experiments.propensity_score_matching import (
     propensity_score_match,
     select_control_group_by_propensity_from_panel,
 )
-from cib_advanced_experiments.synthetic_control import SyntheticControl
+from cib_advanced_experiments.synthetic_control import PlaceboResult, SyntheticControl
 from cib_advanced_experiments.visualization import (
     create_experiment_aggregated_series_figure,
+    create_placebo_distribution_figure,
+    create_placebo_gap_figure,
     create_conformal_ci_band_figure,
     create_conformal_dashboard_figure,
     create_conformal_p_value_grid_figure,
@@ -69,9 +71,12 @@ __all__ = [
     "create_conformal_residuals_figure",
     "create_experiment_aggregated_series_figure",
     "create_experiment_distributions_figure",
+    "create_placebo_distribution_figure",
+    "create_placebo_gap_figure",
     "create_synthetic_control_effect_figure",
     "create_synthetic_control_series_figure",
     "create_synthetic_control_weights_figure",
     "SynthControlModel",
+    "PlaceboResult",
     "SyntheticControl",
 ]

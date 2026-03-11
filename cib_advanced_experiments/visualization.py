@@ -299,6 +299,92 @@ def create_experiment_aggregated_series_figure(
     return fig
 
 
+def create_placebo_gap_figure(
+    placebo_effects: pd.DataFrame,
+    treatment_date: pd.Timestamp,
+    actual_treated_unit: str,
+) -> go.Figure:
+    """Create placebo gap-over-time chart with highlighted treated unit.
+
+    Args:
+        placebo_effects (pd.DataFrame): Dataframe with treated_unit, date and effect columns.
+        treatment_date (pd.Timestamp): Treatment date marker.
+        actual_treated_unit (str): Actual treated unit identifier for highlighting.
+
+    Returns:
+        go.Figure: Configured Plotly figure.
+    """
+    fig = go.Figure()
+    for unit in sorted(placebo_effects["treated_unit"].astype(str).unique().tolist()):
+        unit_data = placebo_effects[
+            placebo_effects["treated_unit"].astype(str) == str(unit)
+        ]
+        is_actual = str(unit) == str(actual_treated_unit)
+        fig.add_trace(
+            go.Scatter(
+                x=unit_data["date"],
+                y=unit_data["effect"],
+                mode="lines",
+                name=str(unit) if is_actual else "Placebo",
+                line=dict(color="royalblue" if is_actual else "rgba(120,120,120,0.35)"),
+                showlegend=is_actual,
+            )
+        )
+    fig.add_hline(y=0.0, line=dict(color="black", width=2))
+    fig.add_vline(
+        x=pd.to_datetime(treatment_date).timestamp() * 1000,
+        line=dict(color="black", dash="dot"),
+        annotation_text="Treatment date",
+    )
+    fig.update_layout(
+        title="Placebo Effects Over Time (Gap = Real - Synthetic)",
+        xaxis_title="Date",
+        yaxis_title="Effect",
+        legend_title="Legend",
+        font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+    )
+    return fig
+
+
+def create_placebo_distribution_figure(
+    effect_values: list[float],
+    treated_effect: float,
+    effect_evaluation_aggregation: str,
+) -> go.Figure:
+    """Create placebo effect distribution with highlighted treated effect.
+
+    Args:
+        effect_values (list[float]): Placebo/reference unit-level effect values.
+        treated_effect (float): Treated-unit effect value.
+        effect_evaluation_aggregation (str): Aggregation label used for effect values.
+
+    Returns:
+        go.Figure: Configured Plotly figure.
+    """
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(
+            x=effect_values,
+            nbinsx=max(1, int(len(effect_values) / 2)),
+            opacity=0.7,
+            name="Placebo effects",
+        )
+    )
+    fig.add_vline(
+        x=treated_effect,
+        line=dict(color="royalblue", width=3, dash="dash"),
+        annotation_text="Treated effect",
+    )
+    fig.update_layout(
+        title=f"Placebo Effect Distribution ({effect_evaluation_aggregation})",
+        xaxis_title="Effect",
+        yaxis_title="Frequency",
+        legend_title="Legend",
+        font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+    )
+    return fig
+
+
 def create_conformal_residuals_figure(
     residuals_df: pd.DataFrame,
     intervention_start: pd.Timestamp,

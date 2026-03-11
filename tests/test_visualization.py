@@ -9,6 +9,8 @@ from cib_advanced_experiments.visualization import (
     create_conformal_residuals_figure,
     create_experiment_aggregated_series_figure,
     create_experiment_distributions_figure,
+    create_placebo_distribution_figure,
+    create_placebo_gap_figure,
     create_synthetic_control_effect_figure,
     create_synthetic_control_series_figure,
     create_synthetic_control_weights_figure,
@@ -88,6 +90,33 @@ def test_create_experiment_aggregated_series_figure_returns_figure():
     )
     assert isinstance(fig, go.Figure)
     assert len(fig.data) == 2
+
+
+def test_create_placebo_gap_figure_returns_figure():
+    df = pd.DataFrame(
+        {
+            "treated_unit": ["u0", "u0", "u1", "u1"],
+            "date": pd.to_datetime(
+                ["2024-01-01", "2024-01-02", "2024-01-01", "2024-01-02"]
+            ),
+            "effect": [0.1, 0.2, -0.05, 0.03],
+        }
+    )
+    fig = create_placebo_gap_figure(
+        placebo_effects=df,
+        treatment_date=pd.Timestamp("2024-01-02"),
+        actual_treated_unit="u0",
+    )
+    assert isinstance(fig, go.Figure)
+
+
+def test_create_placebo_distribution_figure_returns_figure():
+    fig = create_placebo_distribution_figure(
+        effect_values=[-0.1, 0.0, 0.05, 0.2],
+        treated_effect=0.12,
+        effect_evaluation_aggregation="mean_value",
+    )
+    assert isinstance(fig, go.Figure)
 
 
 def test_create_conformal_residuals_figure_returns_figure():
