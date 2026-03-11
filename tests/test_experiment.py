@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from cib_advanced_experiments.experiment import Experiment, ExperimentResult
+from cib_advanced_experiments.synthetic_control import SyntheticControl
 
 
 def _build_experiment_data(seed: int = 101) -> pd.DataFrame:
@@ -66,6 +67,9 @@ def test_experiment_run_and_metrics_success():
     assert "ttest_statistic" in metrics
     assert "ttest_pvalue" in metrics
     assert "test_name" in metrics
+    assert experiment.ttest is not None
+    assert isinstance(experiment.ttest.statistic, float)
+    assert isinstance(experiment.ttest.pvalue, float)
 
 
 def test_experiment_fit_all_and_evaluate_split_api():
@@ -293,3 +297,39 @@ def test_experiment_raises_when_min_units_for_inference_not_met():
             epochs=5,
             lr=0.01,
         )
+
+
+def test_experiment_can_continue_on_fit_error(monkeypatch):
+    data = _build_experiment_data(seed=108)
+    treatments = _build_treatments()
+    control_group = [f"u{i}" for i in range(2, 12)]
+
+    original_fit = SyntheticControl.fit
+
+    def _fit_with_failure(self):
+        if self.treated_unit == "u1":
+            raise RuntimeError("intentional failure for test")
+        return original_fit(self)
+
+    monkeypatch.setattr(SyntheticControl, "fit", _fit_with_failure)
+
+    experiment = Experiment(
+        data=data,
+        treatments_dataframe=treatments,
+        unit_column="unit",
+        date_column="date",
+        features=["y"],
+        treatment_date_column="treatment_date",
+    )
+    fitted = experiment.fit_all(
+        feature="y",
+        to_plot=False,
+        continue_on_fit_error=True,
+        control_group=control_group,
+        epochs=5,
+        lr=0.01,
+    )
+
+    assert len(fitted) == 1
+    assert len(experiment.latest_fit_failures) == 1
+    assert experiment.latest_fit_failures[0].treated_unit == "u1"

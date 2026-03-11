@@ -12,6 +12,7 @@ from cib_advanced_experiments.conformal_inference import (
 from cib_advanced_experiments.experiment import (
     Experiment,
     ExperimentResult,
+    FitFailureResult,
     FittedSyntheticControlResult,
 )
 from cib_advanced_experiments.matching import MatchingResult, select_control_group_by_features
@@ -53,6 +54,7 @@ __all__ = [
     "ConformalFrame",
     "Experiment",
     "ExperimentResult",
+    "FitFailureResult",
     "FittedSyntheticControlResult",
     "MatchingResult",
     "PropensityScoreMatchingResult",

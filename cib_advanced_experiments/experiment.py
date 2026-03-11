@@ -1,5 +1,6 @@
 import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import List, Literal, Union
 
 import numpy as np
@@ -33,6 +34,15 @@ class FittedSyntheticControlResult:
 
 
 @dataclass(frozen=True)
+class FitFailureResult:
+    """Container for one failed treated-unit fit attempt."""
+
+    treated_unit: str
+    treatment_date: pd.Timestamp
+    error: str
+
+
+@dataclass(frozen=True)
 class ExperimentResult:
     """Container for experiment-level outputs and inference.
 
@@ -52,6 +62,7 @@ class ExperimentResult:
         test_pvalue (float): P-value.
         theta (float | None): CUPED theta if applied.
         effect_evaluation_aggregation (str): Aggregation mode used for effect.
+        failed_units (List[FitFailureResult]): Per-unit fit failures collected during fit_all.
     """
 
     fitted_units: List[FittedSyntheticControlResult]
@@ -69,6 +80,7 @@ class ExperimentResult:
     test_pvalue: float
     theta: float | None
     effect_evaluation_aggregation: str
+    failed_units: List[FitFailureResult] = field(default_factory=list)
 
 
 class Experiment:
@@ -120,22 +132,48 @@ class Experiment:
         Returns:
             None
         """
-        self.data = data
+        self.data = data.copy()
         self.treatments_dataframe = treatments_dataframe.copy()
         self.treatment_date_column = treatment_date_column
         self.unit_column = unit_column
-
-        self.__validate_treatments_dataframe()
-
         self.date_column = date_column
         self.features = features
+
+        self.__validate_input_dataframe()
+        self.__normalize_input_data()
+        self.__validate_treatments_dataframe()
+
         self.min_date = min_date
         self.max_date = max_date
         self.date_frequency = date_frequency
         self.aggregation_statistic = aggregation_statistic
-        self.resulting_synthetic_controls = None
+        self.resulting_synthetic_controls: List[SyntheticControl] = []
         self.cuped_enabled = cuped_enabled
         self.latest_result: ExperimentResult | None = None
+        self.latest_fit_failures: List[FitFailureResult] = []
+
+    def __validate_input_dataframe(self) -> None:
+        """Validate source dataframe schema used by Experiment."""
+        if self.unit_column not in self.data.columns.values:
+            raise ValueError(f"No {self.unit_column} in data axis={self.data.columns.values}")
+        if self.date_column not in self.data.columns.values:
+            raise ValueError(f"No {self.date_column} in data axis={self.data.columns.values}")
+        if not self.features:
+            raise ValueError("features should be a non-empty list of column names.")
+        missing_features = [f for f in self.features if f not in self.data.columns.values]
+        if missing_features:
+            raise ValueError(
+                f"Features not found in data: {missing_features}. "
+                f"Available columns={self.data.columns.values.tolist()}"
+            )
+
+    def __normalize_input_data(self) -> None:
+        """Normalize unit and date dtypes for stable comparisons."""
+        self.data[self.unit_column] = self.data[self.unit_column].astype(str)
+        self.data[self.date_column] = pd.to_datetime(self.data[self.date_column])
+        self.treatments_dataframe[self.unit_column] = self.treatments_dataframe[
+            self.unit_column
+        ].astype(str)
 
     def __validate_treatments_dataframe(self):
         """Validate treatments dataframe schema and uniqueness.
@@ -152,6 +190,16 @@ class Experiment:
             raise ValueError(
                 f"No {self.unit_column} in treatments dataframe axis={treatments_dataframe_axis}"
             )
+        treatment_dates = pd.to_datetime(
+            self.treatments_dataframe[self.treatment_date_column], errors="coerce"
+        )
+        if treatment_dates.isna().any():
+            broken_rows = treatment_dates[treatment_dates.isna()].index.tolist()
+            raise ValueError(
+                f"Invalid treatment dates in rows {broken_rows}. "
+                f"Column={self.treatment_date_column}"
+            )
+        self.treatments_dataframe[self.treatment_date_column] = treatment_dates
         duplicated_units = self.treatments_dataframe[self.unit_column].duplicated()
         if duplicated_units.any():
             duplicates = (
@@ -163,6 +211,10 @@ class Experiment:
             raise ValueError(
                 f"Each treated unit should appear once in treatments_dataframe. Duplicates: {duplicates}"
             )
+
+    def __validate_feature(self, feature: str) -> None:
+        if feature not in self.features:
+            raise ValueError(f"{feature=} should be from {self.features=}")
 
     def fit_all(
         self,
@@ -177,6 +229,7 @@ class Experiment:
         propensity_random_state: int = 42,
         to_plot: bool = True,
         to_plot_aggregated: bool = False,
+        continue_on_fit_error: bool = False,
         raise_on_empty: bool = True,
         **kwargs,
     ) -> List[FittedSyntheticControlResult]:
@@ -194,69 +247,89 @@ class Experiment:
             propensity_random_state (int, optional): Propensity model random state.
             to_plot (bool, optional): Whether to plot per-unit synthetic-control results.
             to_plot_aggregated (bool, optional): Whether to plot aggregated mean real-vs-synthetic series after fitting all units.
+            continue_on_fit_error (bool, optional): Continue batch fitting when one treated unit fails.
             raise_on_empty (bool, optional): Raise error when no models were fitted.
             **kwargs: Additional parameters passed to SyntheticControl.
 
         Returns:
             List[FittedSyntheticControlResult]: Fitted model containers for treated units.
         """
-        if feature not in self.features:
-            raise ValueError(f"{feature=} should be from {self.features=}")
+        self.__validate_feature(feature=feature)
 
         fitted_results: List[FittedSyntheticControlResult] = []
-        for treated_unit in tqdm(
-            self.treatments_dataframe[self.unit_column].astype(str).unique(),
+        failed_results: List[FitFailureResult] = []
+        treatment_schedule = self.treatments_dataframe[
+            [self.unit_column, self.treatment_date_column]
+        ].drop_duplicates(subset=[self.unit_column])
+        known_units = set(self.data[self.unit_column].astype(str).unique().tolist())
+
+        for row in tqdm(
+            treatment_schedule.to_dict(orient="records"),
             desc="Synth for treated_unit",
         ):
-            if treated_unit not in self.data[self.unit_column].astype(str).unique():
+            treated_unit = str(row[self.unit_column])
+            treatment_date = pd.to_datetime(row[self.treatment_date_column])
+            if treated_unit not in known_units:
                 logger.info(f"{treated_unit} not in history DataFrame. Skip fitting it.")
                 continue
 
-            treatment_date = pd.to_datetime(
-                self.treatments_dataframe[
-                    self.treatments_dataframe[self.unit_column].astype(str)
-                    == treated_unit
-                ]
-                .iloc[0][self.treatment_date_column]
-            )
-
-            synthetic_control = SyntheticControl(
-                data=self.data,
-                unit_column=self.unit_column,
-                date_column=self.date_column,
-                features=self.features,
-                treated_unit=treated_unit,
-                treatment_date=treatment_date,
-                min_date=self.min_date,
-                max_date=self.max_date,
-                number_of_units_for_matching=number_of_units_for_matching,
-                categorical_matching=categorical_matching,
-                numeric_matching=numeric_matching,
-                matching_method=matching_method,
-                propensity_covariates=propensity_covariates,
-                propensity_caliper=propensity_caliper,
-                propensity_random_state=propensity_random_state,
-                date_frequency=self.date_frequency,
-                aggregation_statistic=self.aggregation_statistic,
-                **kwargs,
-            )
-            synthetic_control.fit()
-            if to_plot:
-                synthetic_control.plot_results(feature, top_weights_to_plot)
-
-            fit_error = float(synthetic_control.model.get_loss_value())
-            fitted_results.append(
-                FittedSyntheticControlResult(
+            try:
+                synthetic_control = SyntheticControl(
+                    data=self.data,
+                    unit_column=self.unit_column,
+                    date_column=self.date_column,
+                    features=self.features,
                     treated_unit=treated_unit,
                     treatment_date=treatment_date,
-                    synthetic_control=synthetic_control,
-                    fit_error=fit_error,
+                    min_date=self.min_date,
+                    max_date=self.max_date,
+                    number_of_units_for_matching=number_of_units_for_matching,
+                    categorical_matching=categorical_matching,
+                    numeric_matching=numeric_matching,
+                    matching_method=matching_method,
+                    propensity_covariates=propensity_covariates,
+                    propensity_caliper=propensity_caliper,
+                    propensity_random_state=propensity_random_state,
+                    date_frequency=self.date_frequency,
+                    aggregation_statistic=self.aggregation_statistic,
+                    **kwargs,
                 )
-            )
+                synthetic_control.fit()
+                if to_plot:
+                    synthetic_control.plot_results(feature, top_weights_to_plot)
+
+                fit_error = float(synthetic_control.model.get_loss_value())
+                fitted_results.append(
+                    FittedSyntheticControlResult(
+                        treated_unit=treated_unit,
+                        treatment_date=treatment_date,
+                        synthetic_control=synthetic_control,
+                        fit_error=fit_error,
+                    )
+                )
+            except Exception as exc:
+                failure = FitFailureResult(
+                    treated_unit=treated_unit,
+                    treatment_date=treatment_date,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                failed_results.append(failure)
+                if continue_on_fit_error:
+                    logger.exception(
+                        f"Fitting failed for treated_unit={treated_unit}. Continue."
+                    )
+                    continue
+                raise
 
         self.resulting_synthetic_controls = [
             fitted.synthetic_control for fitted in fitted_results
         ]
+        self.latest_fit_failures = failed_results
+        if failed_results:
+            logger.warning(
+                f"Failed fits: {len(failed_results)}. "
+                f"Set continue_on_fit_error={continue_on_fit_error} to control behavior."
+            )
         if len(fitted_results) == 0 and raise_on_empty:
             raise ValueError(
                 "No synthetic controls were fitted. Check treatments_dataframe, "
@@ -281,8 +354,7 @@ class Experiment:
         Returns:
             pd.DataFrame: Dataframe with date, real, synthetic and effect columns.
         """
-        if feature not in self.features:
-            raise ValueError(f"{feature=} should be from {self.features=}")
+        self.__validate_feature(feature=feature)
 
         if fitted_units is None:
             if not self.resulting_synthetic_controls:
@@ -422,6 +494,12 @@ class Experiment:
                 raise ValueError(
                     "effect_evaluation_aggregation should be one of ['last_date', 'mean_value']"
                 )
+            if data.empty:
+                raise ValueError(
+                    f"No rows left for treated_unit={fitted.treated_unit} after "
+                    f"effect_evaluation_aggregation={effect_evaluation_aggregation}. "
+                    "Check treatment_date and panel coverage."
+                )
 
             rows.append(
                 {
@@ -526,13 +604,9 @@ class Experiment:
             test_pvalue=float(test_pvalue),
             theta=theta,
             effect_evaluation_aggregation=effect_evaluation_aggregation,
+            failed_units=list(self.latest_fit_failures),
         )
         self.latest_result = result
-        self.mean_synthetic = result.mean_synthetic
-        self.mean_real = result.mean_real
-        self.expected_effect_in_percent = result.expected_effect_in_percent
-        self.ttest = type("TTestResultLike", (), {"statistic": result.test_statistic, "pvalue": result.test_pvalue})()
-        self.theta = result.theta
         return result
 
     def run_experiment(
@@ -562,6 +636,7 @@ class Experiment:
         to_plot: bool = True,
         to_plot_individual: bool = None,
         to_plot_aggregated: bool = False,
+        continue_on_fit_error: bool = False,
         **kwargs,
     ) -> ExperimentResult | None:
         """Run full experiment pipeline: fit models, evaluate, and optionally plot.
@@ -588,6 +663,7 @@ class Experiment:
             to_plot (bool, optional): Plot final experiment-level distributions.
             to_plot_individual (bool, optional): Plot per-unit synthetic-control outputs. If None, equals to_plot.
             to_plot_aggregated (bool, optional): Plot aggregated mean real-vs-synthetic series after fitting all units.
+            continue_on_fit_error (bool, optional): Continue fitting if one treated unit fails.
             **kwargs: Additional kwargs passed to SyntheticControl.
 
         Returns:
@@ -608,6 +684,7 @@ class Experiment:
             propensity_random_state=propensity_random_state,
             to_plot=to_plot_individual,
             to_plot_aggregated=to_plot_aggregated,
+            continue_on_fit_error=continue_on_fit_error,
             raise_on_empty=raise_on_empty,
             **kwargs,
         )
@@ -675,11 +752,20 @@ class Experiment:
         """
         syn = np.asarray(synthetic, dtype=float)
         real_arr = np.asarray(real, dtype=float)
+        if len(syn) == 0 or len(real_arr) == 0:
+            raise ValueError("Inference requires non-empty synthetic and real arrays.")
+        if len(syn) != len(real_arr):
+            raise ValueError(
+                f"Inference requires equal lengths, got len(synthetic)={len(syn)} "
+                f"and len(real)={len(real_arr)}."
+            )
+        if not np.isfinite(syn).all() or not np.isfinite(real_arr).all():
+            raise ValueError("Inference arrays contain NaN or infinite values.")
         if inference_method == "independent_ttest":
             ttest = stats.ttest_ind(syn, real_arr, equal_var=False, nan_policy="omit")
             return "independent_ttest", float(ttest.statistic), float(ttest.pvalue)
         if inference_method == "paired_ttest":
-            if len(syn) != len(real_arr) or len(syn) < 2:
+            if len(syn) < 2:
                 raise ValueError(
                     "paired_ttest requires equal-length arrays with at least 2 observations."
                 )
@@ -707,11 +793,13 @@ class Experiment:
             "Use 'independent_ttest', 'paired_ttest', or 'permutation'."
         )
 
-    def get_metrics(self) -> dict[str, Union[float, tuple[float, float], str]]:
+    def get_metrics(
+        self,
+    ) -> dict[str, Union[float, tuple[float, float], str, int]]:
         """Return summary metrics from the latest run.
 
         Returns:
-            dict[str, Union[float, tuple[float, float], str]]: Summary metrics for monitoring/reporting.
+            dict[str, Union[float, tuple[float, float], str, int]]: Summary metrics for monitoring/reporting.
         """
         if self.latest_result is None:
             raise ValueError("Run experiment first to obtain metrics.")
@@ -728,4 +816,38 @@ class Experiment:
         }
         if self.cuped_enabled:
             metrics["theta"] = self.latest_result.theta
+        if self.latest_result.failed_units:
+            metrics["failed_units"] = len(self.latest_result.failed_units)
         return metrics
+
+    @property
+    def mean_synthetic(self) -> float | None:
+        """Backward-compatible accessor to latest mean synthetic value."""
+        return None if self.latest_result is None else self.latest_result.mean_synthetic
+
+    @property
+    def mean_real(self) -> float | None:
+        """Backward-compatible accessor to latest mean real value."""
+        return None if self.latest_result is None else self.latest_result.mean_real
+
+    @property
+    def expected_effect_in_percent(self) -> float | None:
+        """Backward-compatible accessor to latest expected effect in percent."""
+        if self.latest_result is None:
+            return None
+        return self.latest_result.expected_effect_in_percent
+
+    @property
+    def theta(self) -> float | None:
+        """Backward-compatible accessor to latest CUPED theta."""
+        return None if self.latest_result is None else self.latest_result.theta
+
+    @property
+    def ttest(self) -> SimpleNamespace | None:
+        """Backward-compatible accessor with statistic and pvalue fields."""
+        if self.latest_result is None:
+            return None
+        return SimpleNamespace(
+            statistic=self.latest_result.test_statistic,
+            pvalue=self.latest_result.test_pvalue,
+        )
