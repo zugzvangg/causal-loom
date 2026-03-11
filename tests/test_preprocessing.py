@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from cib_advanced_experiments.preprocessing import (
+    build_synthetic_control_matrices,
     build_conformal_frame,
     prepare_panel_data,
     prepare_rdd_data,
@@ -120,3 +122,117 @@ def test_synthetic_control_accepts_unbalanced_source_data():
 
     assert weights.shape[0] == 10
     assert np.isclose(weights.sum(), 1.0, atol=1e-5)
+
+
+def test_prepare_panel_data_raises_on_missing_columns():
+    data = pd.DataFrame({"unit": ["A"], "date": ["2024-01-01"]})
+    with pytest.raises(ValueError, match="Missing required columns"):
+        prepare_panel_data(
+            data=data,
+            unit_column="unit",
+            date_column="date",
+            value_columns=["y"],
+        )
+
+
+def test_prepare_panel_data_raises_on_invalid_date_range():
+    data = pd.DataFrame(
+        {"unit": ["A", "A"], "date": ["2024-01-01", "2024-01-02"], "y": [1.0, 2.0]}
+    )
+    with pytest.raises(ValueError, match="min_date should be less than max_date"):
+        prepare_panel_data(
+            data=data,
+            unit_column="unit",
+            date_column="date",
+            value_columns=["y"],
+            min_date="2024-01-03",
+            max_date="2024-01-02",
+        )
+
+
+def test_build_synthetic_control_matrices_raises_on_missing_treated_unit():
+    panel = pd.DataFrame(
+        {
+            "unit": ["A", "A", "B", "B"],
+            "date": pd.to_datetime(["2024-01-01", "2024-01-02"] * 2),
+            "y": [1.0, 2.0, 1.5, 1.6],
+        }
+    )
+    with pytest.raises(ValueError, match="is not present in panel_data"):
+        build_synthetic_control_matrices(
+            panel_data=panel,
+            unit_column="unit",
+            date_column="date",
+            features=["y"],
+            treated_unit="missing",
+            treatment_date="2024-01-02",
+        )
+
+
+def test_build_conformal_frame_raises_on_missing_treated_unit():
+    panel = pd.DataFrame(
+        {
+            "unit": ["A", "A", "B", "B"],
+            "date": pd.to_datetime(["2024-01-01", "2024-01-02"] * 2),
+            "y": [1.0, 2.0, 1.5, 1.6],
+        }
+    )
+    with pytest.raises(ValueError, match="is not present in panel_data"):
+        build_conformal_frame(
+            panel_data=panel,
+            unit_column="unit",
+            date_column="date",
+            outcome_column="y",
+            treated_unit="missing",
+            treatment_date="2024-01-02",
+        )
+
+
+def test_prepare_rdd_data_raises_on_non_numeric_columns_and_bandwidth():
+    data = pd.DataFrame(
+        {
+            "score": ["low", "high"],
+            "conversion": [0.1, 0.2],
+            "segment": [1, 2],
+        }
+    )
+    with pytest.raises(ValueError, match="should be numeric"):
+        prepare_rdd_data(
+            data=data,
+            outcome_column="conversion",
+            running_column="score",
+            cutoff=0.0,
+        )
+
+    numeric_data = pd.DataFrame(
+        {"score": [1.0, 2.0], "conversion": [0.1, 0.2], "segment": [1, 2]}
+    )
+    with pytest.raises(ValueError, match="bandwidth should be positive"):
+        prepare_rdd_data(
+            data=numeric_data,
+            outcome_column="conversion",
+            running_column="score",
+            cutoff=1.5,
+            bandwidth=0.0,
+        )
+
+
+def test_prepare_panel_data_accepts_yearly_alias_y():
+    data = pd.DataFrame(
+        {
+            "unit": ["A", "A", "B", "B"],
+            "date": pd.to_datetime(
+                ["2023-01-01", "2024-01-01", "2023-01-01", "2024-01-01"]
+            ),
+            "y": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    prepared = prepare_panel_data(
+        data=data,
+        unit_column="unit",
+        date_column="date",
+        value_columns=["y"],
+        date_frequency="Y",
+        aggregation_statistic="mean",
+    )
+    assert not prepared.empty

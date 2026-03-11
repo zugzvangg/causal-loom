@@ -7,7 +7,7 @@ import pandas as pd
 
 DateLike = Union[str, datetime.datetime, pd.Timestamp]
 AggregationStatistic = Literal["sum", "mean", "max", "min"]
-DateFrequency = Literal["D", "W", "M", "Y"]
+DateFrequency = Literal["D", "W", "M", "Y", "YE"]
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ def _validate_frequency(date_frequency: DateFrequency) -> None:
     Returns:
         None
     """
-    possible_frequencies = {"D", "W", "M", "YE"}
+    possible_frequencies = {"D", "W", "M", "Y", "YE"}
     if date_frequency not in possible_frequencies:
         raise ValueError(
             f"Select date_frequency from {sorted(possible_frequencies)}; got '{date_frequency}'."
@@ -134,6 +134,7 @@ def prepare_panel_data(
     _ensure_columns(data, [unit_column, date_column] + value_columns)
     _validate_frequency(date_frequency)
     _validate_aggregation(aggregation_statistic)
+    normalized_frequency = "YE" if date_frequency == "Y" else date_frequency
 
     prepared = data.copy()
     prepared[unit_column] = prepared[unit_column].astype(str)
@@ -149,7 +150,7 @@ def prepare_panel_data(
     aggregations = {column: aggregation_statistic for column in value_columns}
     aggregated = (
         prepared.groupby(
-            [unit_column, pd.Grouper(key=date_column, freq=date_frequency)],
+            [unit_column, pd.Grouper(key=date_column, freq=normalized_frequency)],
             as_index=False,
         )
         .agg(aggregations)
@@ -157,7 +158,7 @@ def prepare_panel_data(
     )
 
     all_units = aggregated[unit_column].drop_duplicates().tolist()
-    all_dates = pd.date_range(min_date_ts, max_date_ts, freq=date_frequency)
+    all_dates = pd.date_range(min_date_ts, max_date_ts, freq=normalized_frequency)
     full_idx = pd.MultiIndex.from_product(
         (all_units, all_dates), names=[unit_column, date_column]
     )

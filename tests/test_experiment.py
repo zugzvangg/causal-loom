@@ -333,3 +333,31 @@ def test_experiment_can_continue_on_fit_error(monkeypatch):
     assert len(fitted) == 1
     assert len(experiment.latest_fit_failures) == 1
     assert experiment.latest_fit_failures[0].treated_unit == "u1"
+
+
+def test_experiment_raises_on_invalid_treatment_date_values():
+    data = _build_experiment_data(seed=109)
+    treatments = pd.DataFrame({"unit": ["u0"], "treatment_date": ["not-a-date"]})
+    with pytest.raises(ValueError, match="Invalid treatment dates"):
+        Experiment(
+            data=data,
+            treatments_dataframe=treatments,
+            unit_column="unit",
+            date_column="date",
+            features=["y"],
+            treatment_date_column="treatment_date",
+        )
+
+
+def test_experiment_raises_on_missing_feature_in_data():
+    data = _build_experiment_data(seed=110).drop(columns=["y"])
+    treatments = _build_treatments()
+    with pytest.raises(ValueError, match="Features not found in data"):
+        Experiment(
+            data=data,
+            treatments_dataframe=treatments,
+            unit_column="unit",
+            date_column="date",
+            features=["y"],
+            treatment_date_column="treatment_date",
+        )

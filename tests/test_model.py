@@ -23,6 +23,14 @@ def test_fit_outputs_weights_and_loss_cpu():
     assert np.isfinite(loss)
 
 
+def test_model_raises_on_invalid_device_and_loss():
+    with pytest.raises(AssertionError, match="Device should be from"):
+        SynthControlModel(device="tpu")
+
+    with pytest.raises(AssertionError, match="Loss function should be from"):
+        SynthControlModel(loss_func="huber")
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_fit_cuda_device():
     rng = np.random.default_rng(1)
