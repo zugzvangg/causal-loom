@@ -1,11 +1,19 @@
 import datetime
 import warnings
+from dataclasses import dataclass
 from typing import List, Literal, Union
 
 import numpy as np
 import pandas as pd
 from matplotlib import style
+from tqdm import tqdm
 
+from cib_advanced_experiments.conformal_inference import (
+    conformal_confidence_interval,
+    conformal_p_value,
+    conformal_p_value_grid_for_period,
+    conformal_residuals,
+)
 from cib_advanced_experiments.matching import select_control_group_by_features
 from cib_advanced_experiments.model import SynthControlModel
 from cib_advanced_experiments.preprocessing import (
@@ -18,6 +26,13 @@ from cib_advanced_experiments.propensity_score_matching import (
     select_control_group_by_propensity_from_panel,
 )
 from cib_advanced_experiments.visualization import (
+    create_conformal_ci_band_figure,
+    create_conformal_dashboard_figure,
+    create_conformal_p_value_grid_figure,
+    create_conformal_residuals_figure,
+    create_placebo_distribution_figure,
+    create_placebo_gap_figure,
+    create_synthetic_control_effect_figure,
     create_synthetic_control_series_figure,
     create_synthetic_control_weights_figure,
 )
@@ -30,6 +45,31 @@ warnings.simplefilter(action="ignore", category=RuntimeWarning)
 style.use("fivethirtyeight")
 
 
+@dataclass(frozen=True)
+class PlaceboResult:
+    """Container with placebo-series outputs and randomization-style inference.
+
+    Attributes:
+        placebo_effects (pd.DataFrame): Long frame with placebo/treated series and effects.
+        unit_level_summary (pd.DataFrame): Per-unit placebo summary before filtering.
+        filtered_unit_level_summary (pd.DataFrame): Per-unit summary after pre-fit filter.
+        pre_error_border (float): Quantile threshold applied on pre-treatment MSE.
+        treated_effect (float): Treated-unit aggregated effect value.
+        placebo_pvalue (float): Placebo p-value against selected alternative.
+        alternative (str): Alternative hypothesis used for p-value.
+        effect_evaluation_aggregation (str): Aggregation mode used for unit-level effect.
+    """
+
+    placebo_effects: pd.DataFrame
+    unit_level_summary: pd.DataFrame
+    filtered_unit_level_summary: pd.DataFrame
+    pre_error_border: float
+    treated_effect: float
+    placebo_pvalue: float
+    alternative: str
+    effect_evaluation_aggregation: str
+
+
 class SyntheticControl:
     """Module for processing synthetic control.
     Realization is inspired by: https://matheusfacure.github.io/python-causality-handbook/15-Synthetic-Control.html
@@ -40,7 +80,9 @@ class SyntheticControl:
             Each row in dataset represents one observation.
 
         unit_column (str): Column from 'data' which divides units(cnum, cocunut, etc.).
+
         date_column (str): Column from 'data' with the date of event rows(trade_date, deal_date, etc.).
+
         features (str): Columns from 'data' with the numeric features we want to use for fitting
             and check the effect on(pnl, amount, etc.).
 
@@ -53,14 +95,24 @@ class SyntheticControl:
         control_group (List[Union[str, int]], optional): Group of ids from date[unit_column] which to be taken for control group.
             If None, the automactic matching would be done.
 
+        matching_method (Literal["feature", "propensity"], optional): How to build control group when
+            control_group is not passed. Defaults to "feature" for backward compatibility.
+
+        propensity_covariates (List[str], optional): Numeric columns used when matching_method="propensity".
+
+        propensity_caliper (float, optional): Maximum propensity-score distance for eligible controls.
+
+        propensity_random_state (int, optional): Random state for propensity model.
+
         min_date (Union[str, datetime.datetime], optional): Minimal date of column 'date_column' of dataset 'data'
             to take for synthetic control, including. Defaults to None. If None, the minimal date from 'date' will be taken.
 
         max_date (Union[str, datetime.datetime], optional): Maximal date of column 'date_column' of dataset 'data'
             to take for synthetic control, including. Defaults to None. If None, the maximal date from 'date' will be taken.
 
-        date_frequency (Literal["D", "W", "M", "Y], optional): Data frequency aggregation based on time.
-        Possible: "D": daily, "W": weekly, "M": monthly, "Y": yearly. Defaults to "D".
+        date_frequency (Literal["D", "W", "M", "YE"], optional): Data frequency aggregation based on time.
+
+        Possible: "D": daily, "W": weekly, "M": monthly, "YE": yearly. Defaults to "D".
 
         aggregation_statistics (Literal["sum", "mean", "max", "min"], optional): Statistics of arggregation.
             For example, if we work with fx deals, and want to have data on mean deal_turnover per week, we set:
@@ -70,6 +122,14 @@ class SyntheticControl:
         **loss_func(Literal["mse", "mae"]): Optimize function for model.
         **epochs (int): Number of epochs for studying of the model.
         **lr (float): Learning rate of the model.
+
+    Extra methods:
+        get_conformal_residuals(...): residuals under null hypothesis for conformal inference.
+        get_conformal_p_value(...): permutation conformal p-value for a null effect.
+        get_conformal_p_value_grid_for_period(...): p-value grid by null effects for one period.
+        get_conformal_confidence_interval(...): conformal confidence intervals for post-treatment periods.
+        plot_conformal_residuals(...), plot_conformal_p_value_grid_for_period(...),
+        plot_conformal_confidence_interval(...): ready-to-use conformal visualizations.
 
     Returns:
         None
@@ -97,6 +157,32 @@ class SyntheticControl:
         aggregation_statistic: Literal["sum", "mean", "max", "min"] = "mean",
         **kwargs,
     ) -> None:
+        """Initialize synthetic control object.
+
+        Args:
+            data (pd.DataFrame): Source panel/event dataframe.
+            unit_column (str): Unit identifier column.
+            date_column (str): Date column.
+            features (List[str]): Features/outcomes used in synthetic control.
+            treated_unit (Union[str, int]): Treated unit identifier.
+            treatment_date (Union[str, datetime.datetime]): Treatment date.
+            control_group (List[Union[str, int]], optional): Explicit control group.
+            min_date (Union[str, datetime.datetime], optional): Lower date bound.
+            max_date (Union[str, datetime.datetime], optional): Upper date bound.
+            number_of_units_for_matching (int, optional): Number of controls to match automatically.
+            categorical_matching (List[str], optional): Feature matching exact columns.
+            numeric_matching (List[str], optional): Feature matching numeric columns.
+            matching_method (Literal["feature", "propensity"], optional): Matching strategy.
+            propensity_covariates (List[str], optional): Covariates for propensity matching.
+            propensity_caliper (float, optional): Caliper for propensity matching.
+            propensity_random_state (int, optional): Random seed for propensity model.
+            date_frequency (Literal["D", "W", "M", "Y"], optional): Time aggregation frequency.
+            aggregation_statistic (Literal["sum", "mean", "max", "min"], optional): Aggregation operation.
+            **kwargs: Additional parameters for SynthControlModel.
+
+        Returns:
+            None
+        """
         self.data = data.copy()
         # emperical + dont't touch it + don't care
         self.MINIMAL_CONTROL_GROUP_SIZE = 10
@@ -278,7 +364,11 @@ class SyntheticControl:
         self.treatment_date = treatment_date
 
     def __prepare_panel_and_matrices(self) -> None:
-        """Build balanced panel and synthetic-control matrices with shared preprocessing."""
+        """Build balanced panel for downstream synthetic-control matrices.
+
+        Returns:
+            None
+        """
         self.data = prepare_panel_data(
             data=self.data,
             unit_column=self.unit_column,
@@ -314,6 +404,9 @@ class SyntheticControl:
 
         Args:
             aggregation_statistic (Literal["sum", "mean", "max", "min"]): Aggregation statistic.
+
+        Returns:
+            None
         """
         _validate_aggregation(aggregation_statistic)
         self.aggregation_statistic = aggregation_statistic
@@ -321,6 +414,9 @@ class SyntheticControl:
     def __filter_data_by_date(self) -> None:
         """
         We do not need all the data range, so we filter
+
+        Args:
+            None
 
         Returns:
             None
@@ -333,6 +429,9 @@ class SyntheticControl:
     def __aggregate_data(self) -> None:
         """
         Pivoting data in needed format.
+
+        Args:
+            None
 
         Returns:
             None
@@ -361,12 +460,16 @@ class SyntheticControl:
         Returns:
             None
         """
+        self.model_kwargs = kwargs.copy()
         self.model = SynthControlModel(**kwargs)
         self.__weights = None
 
     def fit(self) -> None:
         """
         Method to fit synthetic control. Call after initialization.
+
+        Args:
+            None
 
         Returns:
             None
@@ -377,6 +480,9 @@ class SyntheticControl:
     def get_weights(self) -> np.ndarray:
         """
         Get the weights of the synthetic control model.
+
+        Args:
+            None
 
         Returns:
             np.ndarray: Array of weights.
@@ -411,6 +517,12 @@ class SyntheticControl:
     def get_pre_treatment_mean(self, feature: str) -> float:
         """
         Mean value of feature for treated_unit in treatment_date.
+
+        Args:
+            feature (str): Target feature name.
+
+        Returns:
+            float: Mean pre-treatment feature value for treated unit.
         """
         treated_data = self.data[
             (self.data[self.unit_column] == self.treated_unit)
@@ -418,7 +530,9 @@ class SyntheticControl:
         ]
         return treated_data[feature].mean()
 
-    def plot_results(self, feature: str, top_weights_to_plot: int = 5) -> None:
+    def plot_results(
+        self, feature: str, top_weights_to_plot: int = 5, with_effect: bool = False
+    ) -> None:
         """
         Method plots the 'feature' of 'treated_unit' and synth of 'control_group'.
         Also plots the fitting weights distribution.
@@ -426,6 +540,7 @@ class SyntheticControl:
         Args:
             feature (str): Feature to plot from 'features'.
             top_weights_to_plot (int, optional): Number of top weights to plot. Defaults to 5.
+            with_effect (bool, optional): If True, also show effect/gap plot (real - synthetic).
 
         Returns:
             None
@@ -450,3 +565,612 @@ class SyntheticControl:
 
         fig1.show()
         fig2.show()
+        if with_effect:
+            self.plot_effect(feature=feature)
+
+    def get_effect_data(self, feature: str) -> pd.DataFrame:
+        """Get effect/gap time series as real minus synthetic.
+
+        Args:
+            feature (str): Target feature name.
+
+        Returns:
+            pd.DataFrame: Dataframe with date, real, synthetic and effect columns.
+        """
+        data = self.get_data_on_features(feature=feature).copy()
+        data["effect"] = data["real"] - data["synthetic"]
+        return data
+
+    def get_placebo_effects(
+        self,
+        feature: str,
+        include_treated_unit: bool = True,
+        raise_on_error: bool = True,
+    ) -> pd.DataFrame:
+        """Compute placebo effect paths by treating each unit as if treated.
+
+        Args:
+            feature (str): Target feature name.
+            include_treated_unit (bool, optional): Include actual treated-unit fit in output.
+            raise_on_error (bool, optional): Raise when one placebo fit fails.
+
+        Returns:
+            pd.DataFrame: Long dataframe with treated_unit/date/real/synthetic/effect.
+        """
+        assert feature in self.features, f"Select feature from {self.features}"
+        all_units = sorted(self.data[self.unit_column].astype(str).unique().tolist())
+        if len(all_units) <= self.MINIMAL_CONTROL_GROUP_SIZE:
+            raise ValueError(
+                "Not enough units for placebo analysis: need at least "
+                f"{self.MINIMAL_CONTROL_GROUP_SIZE + 1} total units, got {len(all_units)}."
+            )
+
+        placebo_frames = []
+        for unit in tqdm(
+            all_units,
+            desc="Placebo effect",
+        ):
+            if not include_treated_unit and unit == self.treated_unit:
+                continue
+
+            donor_pool = [candidate for candidate in all_units if candidate != unit]
+            try:
+                placebo_sc = SyntheticControl(
+                    data=self.data,
+                    unit_column=self.unit_column,
+                    date_column=self.date_column,
+                    features=self.features,
+                    treated_unit=unit,
+                    treatment_date=self.treatment_date,
+                    control_group=donor_pool,
+                    min_date=self.min_date,
+                    max_date=self.max_date,
+                    date_frequency=self.date_frequency,
+                    aggregation_statistic=self.aggregation_statistic,
+                    **self.model_kwargs,
+                )
+                placebo_sc.fit()
+                effect_data = placebo_sc.get_effect_data(feature=feature).copy()
+                effect_data["treated_unit"] = str(unit)
+                effect_data["is_actual_treated"] = str(unit) == self.treated_unit
+                placebo_frames.append(effect_data)
+            except Exception:
+                if raise_on_error:
+                    raise
+                continue
+
+        if len(placebo_frames) == 0:
+            raise ValueError("No placebo series were computed.")
+        return pd.concat(placebo_frames, ignore_index=True)
+
+    @staticmethod
+    def _aggregate_effect_series(
+        effects_df: pd.DataFrame,
+        treatment_date: pd.Timestamp,
+        effect_evaluation_aggregation: Literal[
+            "last_date", "mean_value"
+        ] = "mean_value",
+    ) -> float:
+        """Aggregate one unit-level effect series into scalar summary."""
+        if effect_evaluation_aggregation == "last_date":
+            return float(
+                effects_df.loc[
+                    effects_df["date"] == effects_df["date"].max(), "effect"
+                ].mean()
+            )
+        if effect_evaluation_aggregation == "mean_value":
+            return float(
+                effects_df.loc[effects_df["date"] >= treatment_date, "effect"].mean()
+            )
+        raise ValueError(
+            "effect_evaluation_aggregation should be one of ['last_date', 'mean_value']"
+        )
+
+    def get_placebo_result(
+        self,
+        feature: str,
+        effect_evaluation_aggregation: Literal[
+            "last_date", "mean_value"
+        ] = "mean_value",
+        pre_error_quantile: float = 1.0,
+        alternative: Literal["less", "greater", "two-sided"] = "less",
+        raise_on_error: bool = True,
+    ) -> PlaceboResult:
+        """Compute placebo summary table and p-value in randomization style.
+
+        Args:
+            feature (str): Target feature name.
+            effect_evaluation_aggregation (Literal["last_date", "mean_value"], optional): Aggregation for unit effects.
+            pre_error_quantile (float, optional): Quantile filter on pre-treatment MSE in [0, 1].
+            alternative (Literal["less", "greater", "two-sided"], optional): Alternative hypothesis.
+            raise_on_error (bool, optional): Raise when one placebo fit fails.
+
+        Returns:
+            PlaceboResult: Placebo series, summaries and p-value.
+        """
+        if not (0.0 <= pre_error_quantile <= 1.0):
+            raise ValueError(
+                f"pre_error_quantile should be in [0,1], got {pre_error_quantile}."
+            )
+        if alternative not in {"less", "greater", "two-sided"}:
+            raise ValueError(
+                f"alternative should be one of ['less', 'greater', 'two-sided']; got {alternative}."
+            )
+
+        placebo_effects = self.get_placebo_effects(
+            feature=feature,
+            include_treated_unit=True,
+            raise_on_error=raise_on_error,
+        )
+        placebo_effects["date"] = pd.to_datetime(placebo_effects["date"])
+        treatment_date = pd.to_datetime(self.treatment_date)
+
+        summary_rows = []
+        for unit in sorted(
+            placebo_effects["treated_unit"].astype(str).unique().tolist()
+        ):
+            unit_effects = placebo_effects[
+                placebo_effects["treated_unit"] == unit
+            ].copy()
+            pre_block = unit_effects[unit_effects["date"] < treatment_date]
+            if pre_block.empty:
+                raise ValueError(f"No pre-treatment rows for placebo unit '{unit}'.")
+            pre_mse = float(
+                np.mean(np.square(pre_block["effect"].astype(float).values))
+            )
+            aggregated_effect = self._aggregate_effect_series(
+                effects_df=unit_effects,
+                treatment_date=treatment_date,
+                effect_evaluation_aggregation=effect_evaluation_aggregation,
+            )
+            summary_rows.append(
+                {
+                    "treated_unit": str(unit),
+                    "is_actual_treated": str(unit) == self.treated_unit,
+                    "pre_treatment_mse": pre_mse,
+                    "effect": aggregated_effect,
+                }
+            )
+
+        unit_level_summary = pd.DataFrame(summary_rows).sort_values("treated_unit")
+        placebo_only = unit_level_summary[~unit_level_summary["is_actual_treated"]]
+        pre_error_border = float(
+            np.quantile(placebo_only["pre_treatment_mse"], pre_error_quantile)
+        )
+
+        filtered_unit_level_summary = unit_level_summary[
+            (unit_level_summary["pre_treatment_mse"] <= pre_error_border)
+            | (unit_level_summary["is_actual_treated"])
+        ].copy()
+
+        treated_row = filtered_unit_level_summary[
+            filtered_unit_level_summary["is_actual_treated"]
+        ]
+        if treated_row.empty:
+            raise ValueError("Treated unit is missing from placebo summary.")
+        treated_effect = float(treated_row.iloc[0]["effect"])
+
+        reference_effects = filtered_unit_level_summary["effect"].astype(float).values
+        if alternative == "less":
+            placebo_pvalue = float(np.mean(reference_effects <= treated_effect))
+        elif alternative == "greater":
+            placebo_pvalue = float(np.mean(reference_effects >= treated_effect))
+        else:
+            placebo_pvalue = float(
+                np.mean(np.abs(reference_effects) >= abs(treated_effect))
+            )
+
+        return PlaceboResult(
+            placebo_effects=placebo_effects,
+            unit_level_summary=unit_level_summary,
+            filtered_unit_level_summary=filtered_unit_level_summary,
+            pre_error_border=pre_error_border,
+            treated_effect=treated_effect,
+            placebo_pvalue=placebo_pvalue,
+            alternative=alternative,
+            effect_evaluation_aggregation=effect_evaluation_aggregation,
+        )
+
+    def plot_placebo_effects(
+        self,
+        feature: str,
+        pre_error_quantile: float = 1.0,
+        raise_on_error: bool = True,
+    ) -> None:
+        """Plot placebo effect paths with highlighted treated-unit path.
+
+        Args:
+            feature (str): Target feature name.
+            pre_error_quantile (float, optional): Quantile filter on pre-treatment MSE in [0, 1].
+            raise_on_error (bool, optional): Raise when one placebo fit fails.
+
+        Returns:
+            None
+        """
+        placebo_result = self.get_placebo_result(
+            feature=feature,
+            effect_evaluation_aggregation="mean_value",
+            pre_error_quantile=pre_error_quantile,
+            alternative="two-sided",
+            raise_on_error=raise_on_error,
+        )
+        kept_units = set(
+            placebo_result.filtered_unit_level_summary["treated_unit"]
+            .astype(str)
+            .tolist()
+        )
+        effects_to_plot = placebo_result.placebo_effects[
+            placebo_result.placebo_effects["treated_unit"].astype(str).isin(kept_units)
+        ].copy()
+        fig = create_placebo_gap_figure(
+            placebo_effects=effects_to_plot,
+            treatment_date=self.treatment_date,
+            actual_treated_unit=self.treated_unit,
+        )
+        fig.show()
+
+    def plot_placebo_distribution(
+        self,
+        feature: str,
+        effect_evaluation_aggregation: Literal[
+            "last_date", "mean_value"
+        ] = "mean_value",
+        pre_error_quantile: float = 1.0,
+        alternative: Literal["less", "greater", "two-sided"] = "less",
+        raise_on_error: bool = True,
+    ) -> None:
+        """Plot placebo distribution of unit-level effects with treated marker.
+
+        Args:
+            feature (str): Target feature name.
+            effect_evaluation_aggregation (Literal["last_date", "mean_value"], optional): Aggregation for unit effects.
+            pre_error_quantile (float, optional): Quantile filter on pre-treatment MSE in [0, 1].
+            alternative (Literal["less", "greater", "two-sided"], optional): Alternative hypothesis.
+            raise_on_error (bool, optional): Raise when one placebo fit fails.
+
+        Returns:
+            None
+        """
+        placebo_result = self.get_placebo_result(
+            feature=feature,
+            effect_evaluation_aggregation=effect_evaluation_aggregation,
+            pre_error_quantile=pre_error_quantile,
+            alternative=alternative,
+            raise_on_error=raise_on_error,
+        )
+        fig = create_placebo_distribution_figure(
+            effect_values=placebo_result.filtered_unit_level_summary["effect"]
+            .astype(float)
+            .tolist(),
+            treated_effect=placebo_result.treated_effect,
+            effect_evaluation_aggregation=effect_evaluation_aggregation,
+        )
+        fig.show()
+
+    def plot_effect(self, feature: str) -> None:
+        """Plot estimated treatment effect (gap) over time.
+
+        Args:
+            feature (str): Target feature name.
+
+        Returns:
+            None
+        """
+        df_to_plot = self.get_data_on_features(feature=feature)
+        fig = create_synthetic_control_effect_figure(
+            df_to_plot=df_to_plot,
+            treated_unit=self.treated_unit,
+            treatment_date=self.treatment_date,
+            feature=feature,
+        )
+        fig.show()
+
+    def get_conformal_residuals(
+        self,
+        feature: str,
+        null_hypothesis: Union[float, int, np.ndarray, list[float]] = 0.0,
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        window: int = None,
+    ) -> pd.DataFrame:
+        """Compute conformal residuals under a null hypothesis.
+
+        Args:
+            feature (str): Target feature name.
+            null_hypothesis (Union[float, int, np.ndarray, list[float]], optional): Null effect.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            window (int, optional): Number of post periods to include.
+
+        Returns:
+            pd.DataFrame: Residual dataframe for conformal inference.
+        """
+        assert feature in self.features, f"Select feature from {self.features}"
+        return conformal_residuals(
+            panel_data=self.data,
+            unit_column=self.unit_column,
+            date_column=self.date_column,
+            outcome_column=feature,
+            treated_unit=self.treated_unit,
+            intervention_start=intervention_start or self.treatment_date,
+            null_hypothesis=null_hypothesis,
+            model_kwargs=self.model_kwargs,
+            window=window,
+        )
+
+    def get_conformal_p_value(
+        self,
+        feature: str,
+        null_hypothesis: Union[float, int, np.ndarray, list[float]] = 0.0,
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        window: int = None,
+        q: int = 1,
+    ) -> float:
+        """Compute permutation conformal p-value.
+
+        Args:
+            feature (str): Target feature name.
+            null_hypothesis (Union[float, int, np.ndarray, list[float]], optional): Null effect.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            window (int, optional): Number of post periods to include.
+            q (int, optional): Norm parameter for test statistic.
+
+        Returns:
+            float: Conformal p-value.
+        """
+        assert feature in self.features, f"Select feature from {self.features}"
+        return conformal_p_value(
+            panel_data=self.data,
+            unit_column=self.unit_column,
+            date_column=self.date_column,
+            outcome_column=feature,
+            treated_unit=self.treated_unit,
+            intervention_start=intervention_start or self.treatment_date,
+            null_hypothesis=null_hypothesis,
+            model_kwargs=self.model_kwargs,
+            window=window,
+            q=q,
+        )
+
+    def get_conformal_p_value_grid_for_period(
+        self,
+        feature: str,
+        period: Union[str, datetime.datetime, pd.Timestamp],
+        nulls: Union[np.ndarray, list[float]],
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        q: int = 1,
+    ) -> pd.DataFrame:
+        """Compute p-value grid over null effects for one post-treatment period.
+
+        Args:
+            feature (str): Target feature name.
+            period (Union[str, datetime.datetime, pd.Timestamp]): Post-treatment period.
+            nulls (Union[np.ndarray, list[float]]): Candidate null effects.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            q (int, optional): Norm parameter for test statistic.
+
+        Returns:
+            pd.DataFrame: P-value grid indexed by null effects.
+        """
+        assert feature in self.features, f"Select feature from {self.features}"
+        return conformal_p_value_grid_for_period(
+            panel_data=self.data,
+            unit_column=self.unit_column,
+            date_column=self.date_column,
+            outcome_column=feature,
+            treated_unit=self.treated_unit,
+            intervention_start=intervention_start or self.treatment_date,
+            period=period,
+            nulls=nulls,
+            model_kwargs=self.model_kwargs,
+            q=q,
+        )
+
+    def get_conformal_confidence_interval(
+        self,
+        feature: str,
+        nulls: Union[np.ndarray, list[float]],
+        window: int,
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        alpha: float = 0.1,
+        q: int = 1,
+    ) -> pd.DataFrame:
+        """Compute conformal confidence intervals by post-treatment period.
+
+        Args:
+            feature (str): Target feature name.
+            nulls (Union[np.ndarray, list[float]]): Candidate null effects.
+            window (int): Number of post periods.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            alpha (float, optional): Significance level.
+            q (int, optional): Norm parameter for test statistic.
+
+        Returns:
+            pd.DataFrame: Confidence interval bounds by period.
+        """
+        assert feature in self.features, f"Select feature from {self.features}"
+        return conformal_confidence_interval(
+            panel_data=self.data,
+            unit_column=self.unit_column,
+            date_column=self.date_column,
+            outcome_column=feature,
+            treated_unit=self.treated_unit,
+            intervention_start=intervention_start or self.treatment_date,
+            window=window,
+            nulls=nulls,
+            model_kwargs=self.model_kwargs,
+            alpha=alpha,
+            q=q,
+        )
+
+    def plot_conformal_residuals(
+        self,
+        feature: str,
+        null_hypothesis: Union[float, int, np.ndarray, list[float]] = 0.0,
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        window: int = None,
+    ) -> None:
+        """Plot conformal residual trajectory.
+
+        Args:
+            feature (str): Target feature name.
+            null_hypothesis (Union[float, int, np.ndarray, list[float]], optional): Null effect.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            window (int, optional): Number of post periods.
+
+        Returns:
+            None
+        """
+        residuals = self.get_conformal_residuals(
+            feature=feature,
+            null_hypothesis=null_hypothesis,
+            intervention_start=intervention_start,
+            window=window,
+        )
+        start = intervention_start or self.treatment_date
+        fig = create_conformal_residuals_figure(
+            residuals_df=residuals,
+            intervention_start=pd.to_datetime(start),
+        )
+        fig.show()
+
+    def plot_conformal_p_value_grid_for_period(
+        self,
+        feature: str,
+        period: Union[str, datetime.datetime, pd.Timestamp],
+        nulls: Union[np.ndarray, list[float]],
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        alpha: float = 0.1,
+        q: int = 1,
+    ) -> None:
+        """Plot p-value grid over candidate null effects.
+
+        Args:
+            feature (str): Target feature name.
+            period (Union[str, datetime.datetime, pd.Timestamp]): Post-treatment period.
+            nulls (Union[np.ndarray, list[float]]): Candidate null effects.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            alpha (float, optional): Significance level line.
+            q (int, optional): Norm parameter for test statistic.
+
+        Returns:
+            None
+        """
+        p_values = self.get_conformal_p_value_grid_for_period(
+            feature=feature,
+            period=period,
+            nulls=nulls,
+            intervention_start=intervention_start,
+            q=q,
+        )
+        fig = create_conformal_p_value_grid_figure(p_values_df=p_values, alpha=alpha)
+        fig.show()
+
+    def plot_conformal_confidence_interval(
+        self,
+        feature: str,
+        nulls: Union[np.ndarray, list[float]],
+        window: int,
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        alpha: float = 0.1,
+        q: int = 1,
+    ) -> None:
+        """Plot estimated effect with conformal confidence interval band.
+
+        Args:
+            feature (str): Target feature name.
+            nulls (Union[np.ndarray, list[float]]): Candidate null effects.
+            window (int): Number of post periods.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            alpha (float, optional): Significance level.
+            q (int, optional): Norm parameter for test statistic.
+
+        Returns:
+            None
+        """
+        ci = self.get_conformal_confidence_interval(
+            feature=feature,
+            nulls=nulls,
+            window=window,
+            intervention_start=intervention_start,
+            alpha=alpha,
+            q=q,
+        )
+        data = self.get_data_on_features(feature=feature).copy()
+        data["effect"] = data["real"] - data["synthetic"]
+        start = pd.to_datetime(intervention_start or self.treatment_date)
+        effect_df = data[data["date"] >= start].head(window).copy()
+        fig = create_conformal_ci_band_figure(
+            effect_df=effect_df,
+            ci_df=ci,
+            treatment_date=start,
+            alpha=alpha,
+        )
+        fig.show()
+
+    def plot_conformal_dashboard(
+        self,
+        feature: str,
+        nulls: Union[np.ndarray, list[float]],
+        window: int,
+        period: Union[str, datetime.datetime, pd.Timestamp] = None,
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        alpha: float = 0.1,
+        q: int = 1,
+    ) -> None:
+        """Plot unified conformal dashboard with residuals, p-grid and CI band.
+
+        Args:
+            feature (str): Target feature name.
+            nulls (Union[np.ndarray, list[float]]): Candidate null effects.
+            window (int): Number of post periods.
+            period (Union[str, datetime.datetime, pd.Timestamp], optional): Period for p-value grid.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            alpha (float, optional): Significance level.
+            q (int, optional): Norm parameter for test statistic.
+
+        Returns:
+            None
+        """
+        start = pd.to_datetime(intervention_start or self.treatment_date)
+        data = self.get_data_on_features(feature=feature).copy()
+        data["effect"] = data["real"] - data["synthetic"]
+        post_dates = data.loc[data["date"] >= start, "date"].tolist()
+        if len(post_dates) == 0:
+            raise ValueError(
+                "No post-treatment dates available for conformal dashboard."
+            )
+        selected_period = (
+            pd.to_datetime(period) if period is not None else post_dates[0]
+        )
+
+        residuals = self.get_conformal_residuals(
+            feature=feature,
+            null_hypothesis=0.0,
+            intervention_start=start,
+            window=window,
+        )
+        p_values = self.get_conformal_p_value_grid_for_period(
+            feature=feature,
+            period=selected_period,
+            nulls=nulls,
+            intervention_start=start,
+            q=q,
+        )
+        ci = self.get_conformal_confidence_interval(
+            feature=feature,
+            nulls=nulls,
+            window=window,
+            intervention_start=start,
+            alpha=alpha,
+            q=q,
+        )
+        effect_df = data[data["date"] >= start].head(window).copy()
+
+        fig = create_conformal_dashboard_figure(
+            residuals_df=residuals,
+            p_values_df=p_values,
+            effect_df=effect_df,
+            ci_df=ci,
+            treatment_date=start,
+            alpha=alpha,
+        )
+        fig.show()

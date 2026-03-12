@@ -239,3 +239,45 @@ def test_synthetic_control_raises_on_too_small_control_group():
             epochs=5,
             lr=0.01,
         )
+
+
+def test_synthetic_control_placebo_result_api():
+    rng = np.random.default_rng(22)
+    dates = pd.date_range("2024-01-01", periods=8, freq="D")
+    units = [f"u{i}" for i in range(12)]
+    rows = []
+    for idx, unit in enumerate(units):
+        for date in dates:
+            rows.append(
+                {
+                    "unit": unit,
+                    "date": date,
+                    "y": 2.0 + idx * 0.15 + rng.normal(0.0, 0.05),
+                }
+            )
+    data = pd.DataFrame(rows)
+
+    sc = SyntheticControl(
+        data=data,
+        unit_column="unit",
+        date_column="date",
+        features=["y"],
+        treated_unit="u0",
+        treatment_date="2024-01-06",
+        control_group=[f"u{i}" for i in range(1, 11)],
+        epochs=5,
+        lr=0.01,
+    )
+    sc.fit()
+
+    placebo = sc.get_placebo_result(
+        feature="y",
+        effect_evaluation_aggregation="last_date",
+        pre_error_quantile=0.9,
+        alternative="two-sided",
+    )
+
+    assert {"treated_unit", "date", "effect"}.issubset(placebo.placebo_effects.columns)
+    assert {"pre_treatment_mse", "effect"}.issubset(placebo.unit_level_summary.columns)
+    assert 0.0 <= placebo.placebo_pvalue <= 1.0
+    assert placebo.filtered_unit_level_summary["is_actual_treated"].any()
