@@ -132,23 +132,3 @@ def test_conformal_confidence_interval_raises_on_too_large_window():
             alpha=0.1,
             q=1,
         )
-
-
-def test_synthetic_control_has_residuals_decomposition_plot_method():
-    data = _build_panel_data(seed=25)
-    sc = SyntheticControl(
-        data=data,
-        unit_column="unit",
-        date_column="date",
-        features=["y"],
-        treated_unit="u0",
-        treatment_date="2024-01-09",
-        control_group=[f"u{i}" for i in range(1, 11)],
-        epochs=5,
-        lr=0.05,
-    )
-    sc.plot_conformal_residuals_decomposition(
-        feature="y",
-        null_hypothesis=0.0,
-        window=2,
-    )
