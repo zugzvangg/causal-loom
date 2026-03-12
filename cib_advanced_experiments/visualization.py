@@ -385,6 +385,115 @@ def create_placebo_distribution_figure(
     return fig
 
 
+def create_did_2x2_figure(
+    group_means: pd.DataFrame,
+    counterfactual_treated_post: float,
+    estimate: float,
+) -> go.Figure:
+    """Create classic 2x2 DiD plot with treated counterfactual in post period.
+
+    Args:
+        group_means (pd.DataFrame): Dataframe with columns group, post_period, mean_outcome.
+        counterfactual_treated_post (float): Treated-post counterfactual under no treatment.
+        estimate (float): DiD estimate value.
+
+    Returns:
+        go.Figure: Configured Plotly figure.
+    """
+    control = group_means[group_means["group"] == "control"].sort_values("post_period")
+    treated = group_means[group_means["group"] == "treated"].sort_values("post_period")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=["Pre", "Post"],
+            y=control["mean_outcome"].tolist(),
+            mode="lines+markers",
+            name="Control",
+            line=dict(color="gray"),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=["Pre", "Post"],
+            y=treated["mean_outcome"].tolist(),
+            mode="lines+markers",
+            name="Treated",
+            line=dict(color="royalblue"),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=["Post"],
+            y=[counterfactual_treated_post],
+            mode="markers",
+            marker=dict(color="orange", size=12, symbol="x"),
+            name="Treated counterfactual",
+        )
+    )
+    fig.update_layout(
+        title=f"Difference-in-Differences 2x2 (estimate={estimate:.4f})",
+        xaxis_title="Period",
+        yaxis_title="Mean outcome",
+        legend_title="Group",
+        font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+    )
+    return fig
+
+
+def create_did_parallel_trends_figure(
+    trends_frame: pd.DataFrame,
+    treatment_start: pd.Timestamp | str | None,
+    outcome_column: str,
+    pre_period_only: bool = False,
+) -> go.Figure:
+    """Create treated/control trend chart for visual parallel-trends diagnostics.
+
+    Args:
+        trends_frame (pd.DataFrame): Dataframe with time, treated_mean, control_mean columns.
+        treatment_start (pd.Timestamp | str | None): Optional intervention date marker.
+        outcome_column (str): Outcome label for y-axis.
+        pre_period_only (bool, optional): Whether chart contains only pre-period rows.
+
+    Returns:
+        go.Figure: Configured Plotly figure.
+    """
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=trends_frame["time"],
+            y=trends_frame["treated_mean"],
+            mode="lines+markers",
+            name="Treated mean",
+            line=dict(color="royalblue"),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=trends_frame["time"],
+            y=trends_frame["control_mean"],
+            mode="lines+markers",
+            name="Control mean",
+            line=dict(color="gray"),
+        )
+    )
+    if treatment_start is not None:
+        fig.add_vline(
+            x=pd.to_datetime(treatment_start).timestamp() * 1000,
+            line=dict(color="black", dash="dot"),
+            annotation_text="Treatment start",
+        )
+    title_suffix = " (pre-period only)" if pre_period_only else ""
+    fig.update_layout(
+        title=f"DiD Parallel Trends Diagnostic{title_suffix}",
+        xaxis_title="Time",
+        yaxis_title=outcome_column,
+        legend_title="Series",
+        font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+    )
+    return fig
+
+
 def create_conformal_residuals_figure(
     residuals_df: pd.DataFrame,
     intervention_start: pd.Timestamp,
@@ -419,6 +528,86 @@ def create_conformal_residuals_figure(
         yaxis_title="Residual",
         font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
     )
+    return fig
+
+
+def create_conformal_residuals_decomposition_figure(
+    residuals_df: pd.DataFrame,
+    intervention_start: pd.Timestamp,
+) -> go.Figure:
+    """Create 2-panel conformal chart: y0 vs y0_est and residuals.
+
+    Args:
+        residuals_df (pd.DataFrame): Dataframe with date, y0, y0_est, residuals columns.
+        intervention_start (pd.Timestamp): Intervention date marker.
+
+    Returns:
+        go.Figure: Configured Plotly subplot figure.
+    """
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Y0 Under H0", "Residuals Under H0"),
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=residuals_df["date"],
+            y=residuals_df["y0"],
+            mode="lines",
+            name="y0",
+            line=dict(color="royalblue"),
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=residuals_df["date"],
+            y=residuals_df["y0_est"],
+            mode="lines",
+            name="y0_est",
+            line=dict(color="gray"),
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_vline(
+        x=pd.to_datetime(intervention_start).timestamp() * 1000,
+        line=dict(color="black", dash="dot"),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=residuals_df["date"],
+            y=residuals_df["residuals"],
+            mode="lines",
+            name="residuals",
+            line=dict(color="orange"),
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_hline(y=0.0, line=dict(color="black", width=2), row=1, col=2)
+    fig.add_vline(
+        x=pd.to_datetime(intervention_start).timestamp() * 1000,
+        line=dict(color="black", dash="dot"),
+        row=1,
+        col=2,
+    )
+
+    fig.update_layout(
+        title="Conformal Residual Decomposition",
+        height=500,
+        width=1300,
+        font=dict(family="Courier New, monospace", size=12, color="RebeccaPurple"),
+    )
+    fig.update_xaxes(title_text="Date", row=1, col=1)
+    fig.update_yaxes(title_text="Outcome", row=1, col=1)
+    fig.update_xaxes(title_text="Date", row=1, col=2)
+    fig.update_yaxes(title_text="Residual", row=1, col=2)
     return fig
 
 

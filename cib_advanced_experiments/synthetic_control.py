@@ -29,6 +29,7 @@ from cib_advanced_experiments.visualization import (
     create_conformal_ci_band_figure,
     create_conformal_dashboard_figure,
     create_conformal_p_value_grid_figure,
+    create_conformal_residuals_decomposition_figure,
     create_conformal_residuals_figure,
     create_placebo_distribution_figure,
     create_placebo_gap_figure,
@@ -1032,6 +1033,37 @@ class SyntheticControl:
         )
         fig.show()
 
+    def plot_conformal_residuals_decomposition(
+        self,
+        feature: str,
+        null_hypothesis: Union[float, int, np.ndarray, list[float]] = 0.0,
+        intervention_start: Union[str, datetime.datetime, pd.Timestamp] = None,
+        window: int = None,
+    ) -> None:
+        """Plot y0 vs y0_est and residuals in a side-by-side decomposition view.
+
+        Args:
+            feature (str): Target feature name.
+            null_hypothesis (Union[float, int, np.ndarray, list[float]], optional): Null effect.
+            intervention_start (Union[str, datetime.datetime, pd.Timestamp], optional): Intervention date.
+            window (int, optional): Number of post periods.
+
+        Returns:
+            None
+        """
+        residuals = self.get_conformal_residuals(
+            feature=feature,
+            null_hypothesis=null_hypothesis,
+            intervention_start=intervention_start,
+            window=window,
+        )
+        start = intervention_start or self.treatment_date
+        fig = create_conformal_residuals_decomposition_figure(
+            residuals_df=residuals,
+            intervention_start=pd.to_datetime(start),
+        )
+        fig.show()
+
     def plot_conformal_p_value_grid_for_period(
         self,
         feature: str,
@@ -1097,7 +1129,9 @@ class SyntheticControl:
         data = self.get_data_on_features(feature=feature).copy()
         data["effect"] = data["real"] - data["synthetic"]
         start = pd.to_datetime(intervention_start or self.treatment_date)
-        effect_df = data[data["date"] >= start].head(window).copy()
+        # Keep full effect timeline (as in article); CI is shown only for selected
+        # post-treatment window via ci_df index.
+        effect_df = data.copy()
         fig = create_conformal_ci_band_figure(
             effect_df=effect_df,
             ci_df=ci,
@@ -1163,7 +1197,8 @@ class SyntheticControl:
             alpha=alpha,
             q=q,
         )
-        effect_df = data[data["date"] >= start].head(window).copy()
+        # Keep full effect timeline (as in article); CI remains post-window only.
+        effect_df = data.copy()
 
         fig = create_conformal_dashboard_figure(
             residuals_df=residuals,

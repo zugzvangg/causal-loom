@@ -32,10 +32,13 @@ def _prepare_wide_panel(
     treated_unit = str(treated_unit)
     data = panel_data[[unit_column, date_column, outcome_column]].copy()
     data[unit_column] = data[unit_column].astype(str)
+    unit_order = data[unit_column].drop_duplicates().tolist()
     data[date_column] = pd.to_datetime(data[date_column])
 
     wide = data.pivot(index=date_column, columns=unit_column, values=outcome_column)
     wide = wide.sort_index()
+    ordered_columns = [unit for unit in unit_order if unit in wide.columns]
+    wide = wide.reindex(columns=ordered_columns)
     if treated_unit not in wide.columns:
         raise ValueError(f"Treated unit '{treated_unit}' is not present in panel_data.")
     return wide, wide.index.to_numpy()
