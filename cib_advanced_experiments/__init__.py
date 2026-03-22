@@ -9,6 +9,11 @@ from cib_advanced_experiments.conformal_inference import (
     conformal_residuals,
     conformal_test_statistic,
 )
+from cib_advanced_experiments.difference_in_differences import (
+    DifferenceInDifferences,
+    DifferenceInDifferencesResult,
+    difference_in_differences,
+)
 from cib_advanced_experiments.experiment import (
     Experiment,
     ExperimentResult,
@@ -21,7 +26,6 @@ from cib_advanced_experiments.preprocessing import (
     ConformalFrame,
     build_conformal_frame,
     prepare_panel_data,
-    prepare_rdd_data,
 )
 from cib_advanced_experiments.propensity_score_matching import (
     PropensityScoreMatchingResult,
@@ -31,11 +35,14 @@ from cib_advanced_experiments.propensity_score_matching import (
 from cib_advanced_experiments.synthetic_control import PlaceboResult, SyntheticControl
 from cib_advanced_experiments.visualization import (
     create_experiment_aggregated_series_figure,
+    create_did_2x2_figure,
+    create_did_parallel_trends_figure,
     create_placebo_distribution_figure,
     create_placebo_gap_figure,
     create_conformal_ci_band_figure,
     create_conformal_dashboard_figure,
     create_conformal_p_value_grid_figure,
+    create_conformal_residuals_decomposition_figure,
     create_conformal_residuals_figure,
     create_experiment_distributions_figure,
     create_synthetic_control_effect_figure,
@@ -53,6 +60,9 @@ __all__ = [
     "conformal_p_value_grid_for_period",
     "conformal_residuals",
     "conformal_test_statistic",
+    "DifferenceInDifferences",
+    "DifferenceInDifferencesResult",
+    "difference_in_differences",
     "ConformalFrame",
     "Experiment",
     "ExperimentResult",
@@ -61,15 +71,17 @@ __all__ = [
     "MatchingResult",
     "PropensityScoreMatchingResult",
     "prepare_panel_data",
-    "prepare_rdd_data",
     "propensity_score_match",
     "select_control_group_by_propensity_from_panel",
     "select_control_group_by_features",
     "create_conformal_ci_band_figure",
     "create_conformal_dashboard_figure",
     "create_conformal_p_value_grid_figure",
+    "create_conformal_residuals_decomposition_figure",
     "create_conformal_residuals_figure",
     "create_experiment_aggregated_series_figure",
+    "create_did_2x2_figure",
+    "create_did_parallel_trends_figure",
     "create_experiment_distributions_figure",
     "create_placebo_distribution_figure",
     "create_placebo_gap_figure",

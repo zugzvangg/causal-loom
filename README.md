@@ -2,10 +2,10 @@
 
 Библиотека для прикладного каузального анализа на табличных данных:
 - `Synthetic Control` (с ограничениями на веса),
+- `Difference-in-Differences` (оценка эффекта + инференс + графики),
 - подбор контрольной группы (`feature matching`, `propensity score matching`),
 - `Conformal Inference` для Synthetic Control (p-value, CI, dashboard),
 - инфраструктура для пакетных запусков экспериментов (`Experiment`),
-- утилиты препроцессинга панельных данных + подготовка к RDD.
 
 ## Что внутри
 
@@ -29,7 +29,13 @@
 - Инверсия теста в confidence intervals.
 - Готовые визуализации + единый conformal dashboard.
 
-### 4) Experiment API
+### 4) Difference-in-Differences API
+- `DifferenceInDifferences(...)` — объектный API для 2x2 DiD.
+- `difference_in_differences(...)` — one-shot оценка.
+- `plot_2x2()` и `plot_parallel_trends(...)` — диагностические графики.
+- `get_estimators_breakdown()` — разложение naive-оценок и итогового DiD.
+
+### 5) Experiment API
 - `fit_all(...)` для фитинга по treated-unit.
 - `evaluate(...)` для фильтрации/инференса/метрик.
 - `run_experiment(...)` как end-to-end пайплайн.
@@ -38,10 +44,9 @@
   - `paired_ttest`,
   - `permutation`.
 
-### 5) Preprocessing API
+### 6) Preprocessing API
 - `prepare_panel_data(...)` — балансировка panel.
 - `build_conformal_frame(...)` — pre/post блоки.
-- `prepare_rdd_data(...)` — подготовка таблицы под sharp RDD.
 
 ---
 
@@ -193,6 +198,28 @@ metrics = experiment.get_metrics()
 
 ---
 
+## Difference-in-Differences (пример)
+
+```python
+from cib_advanced_experiments import DifferenceInDifferences
+
+did_data = df.copy()
+did_data["treated"] = (did_data["state"] == treated_state).astype(int)
+did_data["post"] = (did_data["date"] >= treatment_date).astype(int)
+
+did = DifferenceInDifferences(
+    data=did_data,
+    outcome_column="cigsale",
+    treatment_column="treated",
+    post_column="post",
+)
+did_result = did.fit(alpha=0.05)
+did.plot_2x2()
+did.plot_parallel_trends(time_column="date", treatment_start=treatment_date)
+```
+
+---
+
 ## Демонстрационный ноутбук
 
 Полный walkthrough на `smoking.csv`:
@@ -204,7 +231,9 @@ metrics = experiment.get_metrics()
 - matching,
 - synthetic control,
 - conformal inference + dashboard,
-- новый `Experiment`.
+- новый `Experiment`,
+- `Placebo`,
+- `Difference-in-Differences`.
 
 ---
 
@@ -219,10 +248,10 @@ PYTHONPATH=. uv run pytest -q
 ## Основные модули
 
 - `cib_advanced_experiments/synthetic_control.py`
+- `cib_advanced_experiments/difference_in_differences.py`
 - `cib_advanced_experiments/experiment.py`
 - `cib_advanced_experiments/conformal_inference.py`
 - `cib_advanced_experiments/matching.py`
 - `cib_advanced_experiments/propensity_score_matching.py`
 - `cib_advanced_experiments/preprocessing.py`
 - `cib_advanced_experiments/visualization.py`
-
