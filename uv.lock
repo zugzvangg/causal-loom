@@ -19,7 +19,6 @@ name = "advanced-experiments"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "jupyter" },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -36,13 +35,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "jupyter" },
     { name = "notebook" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "jupyter", specifier = ">=1.1.1" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.10.0" },
     { name = "numpy", specifier = ">=2.2.2" },
@@ -55,6 +54,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "jupyter", specifier = ">=1.1.1" },
     { name = "notebook", specifier = "==7.5.5" },
     { name = "pytest", specifier = ">=9.0.2" },
 ]

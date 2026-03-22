@@ -3,6 +3,7 @@
 Библиотека для прикладного каузального анализа на табличных данных:
 - `Synthetic Control` (с ограничениями на веса),
 - `Difference-in-Differences` (оценка эффекта + инференс + графики),
+- `Synthetic Difference-in-Differences` (SDID: unit/time weights + weighted DiD),
 - подбор контрольной группы (`feature matching`, `propensity score matching`),
 - `Conformal Inference` для Synthetic Control (p-value, CI, dashboard),
 - инфраструктура для пакетных запусков экспериментов (`Experiment`),
@@ -35,7 +36,13 @@
 - `plot_2x2()` и `plot_parallel_trends(...)` — диагностические графики.
 - `get_estimators_breakdown()` — разложение naive-оценок и итогового DiD.
 
-### 5) Experiment API
+### 5) Synthetic Difference-in-Differences API
+- `SyntheticDifferenceInDifferences(...)` — объектный API для SDID.
+- `synthetic_difference_in_differences(...)` — one-shot оценка SDID.
+- `fit(...)` оценивает unit/time weights и SDID ATT (weighted FE-регрессия).
+- `get_parallel_trends_frame(...)`, `plot_2x2()`, `plot_parallel_trends(...)`.
+
+### 6) Experiment API
 - `fit_all(...)` для фитинга по treated-unit.
 - `evaluate(...)` для фильтрации/инференса/метрик.
 - `run_experiment(...)` как end-to-end пайплайн.
@@ -44,7 +51,7 @@
   - `paired_ttest`,
   - `permutation`.
 
-### 6) Preprocessing API
+### 7) Preprocessing API
 - `prepare_panel_data(...)` — балансировка panel.
 - `build_conformal_frame(...)` — pre/post блоки.
 
@@ -220,11 +227,36 @@ did.plot_parallel_trends(time_column="date", treatment_start=treatment_date)
 
 ---
 
+## Synthetic Difference-in-Differences (пример)
+
+```python
+from cib_advanced_experiments import SyntheticDifferenceInDifferences
+
+sdid = SyntheticDifferenceInDifferences(
+    data=did_data,
+    outcome_column="cigsale",
+    unit_column="state",
+    time_column="date",
+    treatment_column="treated",
+    post_column="post",
+)
+sdid_result = sdid.fit(alpha=0.05)
+
+print("SDID ATT:", sdid_result.estimate)
+print("Unit weights sum:", sdid_result.unit_weights.sum())
+print("Time weights sum:", sdid_result.time_weights.sum())
+sdid.plot_2x2()
+sdid.plot_parallel_trends(treatment_start=treatment_date, pre_period_only=True)
+```
+
+---
+
 ## Демонстрационный ноутбук
 
 Полный walkthrough на `smoking.csv`:
 
 - [`notebooks/smoking_library_demo_ru.ipynb`](notebooks/smoking_library_demo_ru.ipynb)
+- [`notebooks/sdid_library_demo_ru.ipynb`](notebooks/sdid_library_demo_ru.ipynb)
 
 В нём есть:
 - preprocessing,
@@ -249,6 +281,7 @@ PYTHONPATH=. uv run pytest -q
 
 - `cib_advanced_experiments/synthetic_control.py`
 - `cib_advanced_experiments/difference_in_differences.py`
+- `cib_advanced_experiments/synthetic_difference_in_differences.py`
 - `cib_advanced_experiments/experiment.py`
 - `cib_advanced_experiments/conformal_inference.py`
 - `cib_advanced_experiments/matching.py`
