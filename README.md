@@ -40,6 +40,9 @@
 - `SyntheticDifferenceInDifferences(...)` — объектный API для SDID.
 - `synthetic_difference_in_differences(...)` — one-shot оценка SDID.
 - `fit(...)` оценивает unit/time weights и SDID ATT (weighted FE-регрессия).
+- Поддержка `covariate_columns` (residualization) и `cluster_by_unit` (clustered SE).
+- `fit_effects_by_period(...)` — оценка SDID по каждому post-периоду.
+- `fit_staggered_sdid(...)` — cohort-decomposition для staggered adoption.
 - `get_parallel_trends_frame(...)`, `plot_2x2()`, `plot_parallel_trends(...)`.
 
 ### 6) Experiment API
@@ -247,6 +250,28 @@ print("Unit weights sum:", sdid_result.unit_weights.sum())
 print("Time weights sum:", sdid_result.time_weights.sum())
 sdid.plot_2x2()
 sdid.plot_parallel_trends(treatment_start=treatment_date, pre_period_only=True)
+```
+
+По-периодные эффекты:
+
+```python
+period_effects = sdid.fit_effects_by_period(alpha=0.05)
+```
+
+Staggered adoption:
+
+```python
+from cib_advanced_experiments import fit_staggered_sdid
+
+staggered_res = fit_staggered_sdid(
+    data=panel_with_staggered_treatment,
+    outcome_col="y",
+    unit_column="unit",
+    time_column="date",
+    treatment_column="treated",
+    post_column="post",
+)
+print(staggered_res.aggregate_estimate)
 ```
 
 ---
