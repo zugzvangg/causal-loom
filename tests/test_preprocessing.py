@@ -3,10 +3,9 @@ import pandas as pd
 import pytest
 
 from cib_advanced_experiments.preprocessing import (
-    build_synthetic_control_matrices,
     build_conformal_frame,
+    build_synthetic_control_matrices,
     prepare_panel_data,
-    prepare_rdd_data,
 )
 from cib_advanced_experiments.synthetic_control import SyntheticControl
 
@@ -67,28 +66,6 @@ def test_build_conformal_frame_splits_pre_and_post():
     assert frame.post_treatment_treated.shape[0] == 1
     assert frame.pre_treatment_controls.shape[0] == 2
     assert frame.post_treatment_controls.shape[0] == 1
-
-
-def test_prepare_rdd_data_creates_centered_running_and_treatment():
-    data = pd.DataFrame(
-        {
-            "score": [45, 49, 50, 55],
-            "conversion": [0.1, 0.2, 0.4, 0.6],
-            "segment": [1, 1, 2, 2],
-        }
-    )
-    prepared = prepare_rdd_data(
-        data=data,
-        outcome_column="conversion",
-        running_column="score",
-        cutoff=50,
-        covariates=["segment"],
-        bandwidth=5,
-    )
-
-    assert prepared["running_centered"].abs().max() <= 5
-    assert prepared.loc[prepared["score"] >= 50, "treatment"].eq(1).all()
-    assert prepared.loc[prepared["score"] < 50, "treatment"].eq(0).all()
 
 
 def test_synthetic_control_accepts_unbalanced_source_data():
@@ -185,35 +162,6 @@ def test_build_conformal_frame_raises_on_missing_treated_unit():
             outcome_column="y",
             treated_unit="missing",
             treatment_date="2024-01-02",
-        )
-
-
-def test_prepare_rdd_data_raises_on_non_numeric_columns_and_bandwidth():
-    data = pd.DataFrame(
-        {
-            "score": ["low", "high"],
-            "conversion": [0.1, 0.2],
-            "segment": [1, 2],
-        }
-    )
-    with pytest.raises(ValueError, match="should be numeric"):
-        prepare_rdd_data(
-            data=data,
-            outcome_column="conversion",
-            running_column="score",
-            cutoff=0.0,
-        )
-
-    numeric_data = pd.DataFrame(
-        {"score": [1.0, 2.0], "conversion": [0.1, 0.2], "segment": [1, 2]}
-    )
-    with pytest.raises(ValueError, match="bandwidth should be positive"):
-        prepare_rdd_data(
-            data=numeric_data,
-            outcome_column="conversion",
-            running_column="score",
-            cutoff=1.5,
-            bandwidth=0.0,
         )
 
 
