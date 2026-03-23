@@ -6,6 +6,7 @@ import pandas as pd
 from plotly import graph_objects as go
 from scipy import stats
 
+from cib_advanced_experiments._did_utils import safe_mean, validate_binary_column
 from cib_advanced_experiments.visualization import (
     create_did_2x2_figure,
     create_did_parallel_trends_figure,
@@ -47,24 +48,6 @@ class DifferenceInDifferencesResult:
     control_change: float
     naive_before_after: float
     naive_post_period_comparison: float
-
-
-def _validate_binary_column(data: pd.DataFrame, column: str) -> None:
-    values = sorted(data[column].dropna().unique().tolist())
-    if set(values) != {0, 1}:
-        raise ValueError(
-            f"Column '{column}' should be binary with values {{0, 1}}, got {values}."
-        )
-
-
-def _safe_mean(data: pd.DataFrame, mask: pd.Series, outcome_column: str) -> float:
-    subset = data.loc[mask, outcome_column]
-    if subset.empty:
-        raise ValueError(
-            "Each DiD cell should have at least one observation. "
-            "Check treatment/post assignment."
-        )
-    return float(subset.mean())
 
 
 class DifferenceInDifferences:
@@ -113,8 +96,8 @@ class DifferenceInDifferences:
         prepared[self.treatment_column] = prepared[self.treatment_column].astype(int)
         prepared[self.post_column] = prepared[self.post_column].astype(int)
 
-        _validate_binary_column(prepared, self.treatment_column)
-        _validate_binary_column(prepared, self.post_column)
+        validate_binary_column(prepared, self.treatment_column)
+        validate_binary_column(prepared, self.post_column)
         self.data = prepared.reset_index(drop=True)
 
     def fit(self, alpha: float = 0.05) -> DifferenceInDifferencesResult:
@@ -133,22 +116,22 @@ class DifferenceInDifferences:
         t = self.data[self.post_column].astype(float).to_numpy()
         y = self.data[self.outcome_column].astype(float).to_numpy()
 
-        treated_pre = _safe_mean(
+        treated_pre = safe_mean(
             self.data,
             (self.data[self.treatment_column] == 1) & (self.data[self.post_column] == 0),
             self.outcome_column,
         )
-        treated_post = _safe_mean(
+        treated_post = safe_mean(
             self.data,
             (self.data[self.treatment_column] == 1) & (self.data[self.post_column] == 1),
             self.outcome_column,
         )
-        control_pre = _safe_mean(
+        control_pre = safe_mean(
             self.data,
             (self.data[self.treatment_column] == 0) & (self.data[self.post_column] == 0),
             self.outcome_column,
         )
-        control_post = _safe_mean(
+        control_post = safe_mean(
             self.data,
             (self.data[self.treatment_column] == 0) & (self.data[self.post_column] == 1),
             self.outcome_column,

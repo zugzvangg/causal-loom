@@ -5,342 +5,26 @@ import numpy as np
 import pandas as pd
 from plotly import graph_objects as go
 from scipy import stats
-from scipy.optimize import minimize
 
+from cib_advanced_experiments._did_utils import (
+    safe_weighted_mean as _safe_weighted_mean,
+)
+from cib_advanced_experiments._sdid_core import (
+    _SdidCellMetrics,
+    _SdidInferenceSummary,
+    _cluster_robust_covariance,
+    _fit_time_weights_core,
+    _fit_unit_weights_core,
+    _join_sdid_weights_core,
+    _prepare_sdid_panel,
+    calculate_regularization,
+    calculate_sigma_hat,
+    calculate_time_regularization,
+)
 from cib_advanced_experiments.visualization import (
     create_did_2x2_figure,
     create_did_parallel_trends_figure,
 )
-
-
-def _validate_binary_column(data: pd.DataFrame, column: str) -> None:
-    """Validate that a column contains only binary values {0, 1}.
-
-    Args:
-        data (pd.DataFrame): Input dataframe.
-        column (str): Column name to validate.
-
-    Returns:
-        None
-    """
-    values = sorted(data[column].dropna().unique().tolist())
-    if set(values) != {0, 1}:
-        raise ValueError(
-            f"Column '{column}' should be binary with values {{0, 1}}, got {values}."
-        )
-
-
-def _safe_weighted_mean(
-    data: pd.DataFrame,
-    mask: pd.Series,
-    outcome_column: str,
-    weight_column: str,
-) -> float:
-    """Compute weighted mean with safety checks for empty/zero-weight slices.
-
-    Args:
-        data (pd.DataFrame): Source dataframe.
-        mask (pd.Series): Boolean mask for subset selection.
-        outcome_column (str): Outcome column name.
-        weight_column (str): Weight column name.
-
-    Returns:
-        float: Weighted mean of outcome for selected rows.
-    """
-    subset = data.loc[mask, [outcome_column, weight_column]]
-    if subset.empty:
-        raise ValueError(
-            "Each SDID cell should have at least one observation. "
-            "Check treatment/post assignment."
-        )
-
-    weights = subset[weight_column].astype(float).to_numpy()
-    values = subset[outcome_column].astype(float).to_numpy()
-    total_weight = float(weights.sum())
-    if np.isclose(total_weight, 0.0):
-        raise ValueError("Weights sum to zero in one of SDID cells.")
-    return float(np.average(values, weights=weights))
-
-
-def _solve_simplex_with_intercept(
-    design_matrix: np.ndarray,
-    target: np.ndarray,
-    ridge_penalty: float,
-    max_iter: int,
-    tolerance: float,
-) -> tuple[float, np.ndarray]:
-    """Solve constrained ridge problem with simplex weights and free intercept.
-
-    Objective:
-    min ||intercept + Xw - y||^2 + ridge*||w||^2
-    s.t. w_i >= 0 and sum_i w_i = 1.
-
-    Args:
-        design_matrix (np.ndarray): Design matrix X with shape (n_samples, n_features).
-        target (np.ndarray): Target vector y with shape (n_samples,).
-        ridge_penalty (float): Ridge penalty coefficient.
-        max_iter (int): Maximum SLSQP iterations.
-        tolerance (float): Function tolerance for SLSQP termination.
-
-    Returns:
-        tuple[float, np.ndarray]: Estimated intercept and simplex weight vector.
-    """
-    X = np.asarray(design_matrix, dtype=float)
-    y = np.asarray(target, dtype=float).reshape(-1)
-    if X.ndim != 2:
-        raise ValueError(f"design_matrix should be 2D, got shape={X.shape}.")
-    if X.shape[0] != y.shape[0]:
-        raise ValueError(
-            "design_matrix and target should have same row count, "
-            f"got {X.shape[0]} and {y.shape[0]}."
-        )
-    if X.shape[1] == 0:
-        raise ValueError("design_matrix should have at least one donor column.")
-
-    n_features = X.shape[1]
-    initial_weights = np.full(shape=n_features, fill_value=1.0 / n_features)
-    initial_intercept = float(np.mean(y - X @ initial_weights))
-    initial_guess = np.concatenate([[initial_intercept], initial_weights])
-
-    def objective(params: np.ndarray) -> float:
-        intercept = float(params[0])
-        weights = params[1:]
-        residuals = intercept + X @ weights - y
-        return float(
-            np.sum(np.square(residuals))
-            + max(0.0, float(ridge_penalty)) * np.sum(np.square(weights))
-        )
-
-    constraints = [{"type": "eq", "fun": lambda params: np.sum(params[1:]) - 1.0}]
-    bounds = [(None, None)] + [(0.0, 1.0) for _ in range(n_features)]
-
-    result = minimize(
-        objective,
-        initial_guess,
-        method="SLSQP",
-        bounds=bounds,
-        constraints=constraints,
-        options={"maxiter": int(max_iter), "ftol": float(tolerance)},
-    )
-    if not result.success:
-        raise ValueError(f"SLSQP optimization failed: {result.message}")
-
-    intercept = float(result.x[0])
-    weights = np.asarray(result.x[1:], dtype=float)
-    weights = np.clip(weights, 0.0, 1.0)
-    weight_sum = float(weights.sum())
-    if np.isclose(weight_sum, 0.0):
-        raise ValueError("SLSQP produced near-zero weights sum.")
-    weights = weights / weight_sum
-    return intercept, weights
-
-
-def _calculate_first_difference_std(
-    data: pd.DataFrame,
-    outcome_column: str,
-    unit_column: str,
-    time_column: str,
-    treatment_column: str,
-    post_column: str,
-) -> float:
-    """Estimate std of first differences on control pre-treatment rows.
-
-    Args:
-        data (pd.DataFrame): Input panel dataframe.
-        outcome_column (str): Outcome column name.
-        unit_column (str): Unit identifier column.
-        time_column (str): Time column.
-        treatment_column (str): Treatment indicator column.
-        post_column (str): Post-period indicator column.
-
-    Returns:
-        float: Standard deviation of first differences with epsilon fallback.
-    """
-    control_pre = data[
-        (data[treatment_column] == 0) & (data[post_column] == 0)
-    ].sort_values([unit_column, time_column])
-    first_diff_std = (
-        control_pre.groupby(unit_column)[outcome_column].diff().astype(float).std()
-    )
-    if pd.isna(first_diff_std) or np.isclose(float(first_diff_std), 0.0):
-        return 1e-8
-    return float(first_diff_std)
-
-
-def _cluster_robust_covariance(
-    X: np.ndarray,
-    residuals: np.ndarray,
-    weights: np.ndarray,
-    clusters: np.ndarray,
-) -> tuple[np.ndarray, int]:
-    """Compute one-way cluster-robust covariance for weighted least squares.
-
-    Args:
-        X (np.ndarray): Design matrix with shape (n_obs, n_params).
-        residuals (np.ndarray): Residual vector with shape (n_obs,).
-        weights (np.ndarray): Non-negative observation weights with shape (n_obs,).
-        clusters (np.ndarray): Cluster labels with shape (n_obs,).
-
-    Returns:
-        tuple[np.ndarray, int]: Cluster-robust covariance matrix and number of clusters.
-    """
-    if X.ndim != 2:
-        raise ValueError(f"X should be 2D array, got shape={X.shape}.")
-    if residuals.ndim != 1:
-        raise ValueError(f"residuals should be 1D array, got shape={residuals.shape}.")
-    if weights.ndim != 1:
-        raise ValueError(f"weights should be 1D array, got shape={weights.shape}.")
-    if clusters.ndim != 1:
-        raise ValueError(f"clusters should be 1D array, got shape={clusters.shape}.")
-
-    n_obs, n_params = X.shape
-    if not (
-        residuals.shape[0] == n_obs
-        and weights.shape[0] == n_obs
-        and clusters.shape[0] == n_obs
-    ):
-        raise ValueError("X, residuals, weights and clusters should have same row count.")
-
-    xtwx = X.T @ (X * weights[:, None])
-    bread = np.linalg.pinv(xtwx)
-
-    cluster_labels = pd.Series(clusters).astype(str).to_numpy()
-    unique_clusters = pd.Series(cluster_labels).unique().tolist()
-    n_clusters = len(unique_clusters)
-    if n_clusters == 0:
-        raise ValueError("No clusters provided for cluster-robust covariance.")
-
-    meat = np.zeros((n_params, n_params), dtype=float)
-    for cluster in unique_clusters:
-        mask = cluster_labels == str(cluster)
-        X_g = X[mask]
-        u_g = residuals[mask]
-        w_g = weights[mask]
-        score_g = X_g.T @ (w_g * u_g)
-        meat += np.outer(score_g, score_g)
-
-    covariance = bread @ meat @ bread
-    if n_clusters > 1 and n_obs > n_params:
-        correction = (n_clusters / (n_clusters - 1.0)) * ((n_obs - 1.0) / (n_obs - n_params))
-        covariance = correction * covariance
-    return covariance, n_clusters
-
-
-def calculate_sigma_hat(
-    panel: pd.DataFrame,
-    outcome_col: str,
-    unit_column: str = "unit",
-    time_column: str = "time",
-    treatment_column: str = "treated",
-    post_column: str = "post",
-) -> float:
-    """Estimate sigma of first differences on control pre-period observations.
-
-    Args:
-        panel (pd.DataFrame): Input panel dataframe.
-        outcome_col (str): Outcome column.
-        unit_column (str, optional): Unit identifier column.
-        time_column (str, optional): Time column.
-        treatment_column (str, optional): Treatment indicator column.
-        post_column (str, optional): Post-period indicator column.
-
-    Returns:
-        float: Estimated sigma-hat value.
-    """
-    if outcome_col not in panel.columns:
-        raise ValueError(f"Column '{outcome_col}' is not present in panel.")
-    for column in [unit_column, time_column, treatment_column, post_column]:
-        if column not in panel.columns:
-            raise ValueError(f"Column '{column}' is not present in panel.")
-    return _calculate_first_difference_std(
-        data=panel,
-        outcome_column=outcome_col,
-        unit_column=unit_column,
-        time_column=time_column,
-        treatment_column=treatment_column,
-        post_column=post_column,
-    )
-
-
-def calculate_time_regularization(
-    panel: pd.DataFrame,
-    outcome_col: str,
-    unit_column: str = "unit",
-    time_column: str = "time",
-    treatment_column: str = "treated",
-    post_column: str = "post",
-    ridge_scale: float = 1e-6,
-) -> float:
-    """Calculate SDID time-weight regularization coefficient.
-
-    Args:
-        panel (pd.DataFrame): Input panel dataframe.
-        outcome_col (str): Outcome column.
-        unit_column (str, optional): Unit identifier column.
-        time_column (str, optional): Time column.
-        treatment_column (str, optional): Treatment indicator column.
-        post_column (str, optional): Post-period indicator column.
-        ridge_scale (float, optional): Multiplicative scale for sigma-hat.
-
-    Returns:
-        float: Time regularization value.
-    """
-    if ridge_scale <= 0:
-        return 0.0
-    sigma_hat = calculate_sigma_hat(
-        panel=panel,
-        outcome_col=outcome_col,
-        unit_column=unit_column,
-        time_column=time_column,
-        treatment_column=treatment_column,
-        post_column=post_column,
-    )
-    return float(ridge_scale * sigma_hat)
-
-
-def calculate_regularization(
-    panel: pd.DataFrame,
-    outcome_col: str,
-    unit_column: str = "unit",
-    time_column: str = "time",
-    treatment_column: str = "treated",
-    post_column: str = "post",
-) -> float:
-    """Calculate SDID unit-weight regularization zeta.
-
-    Args:
-        panel (pd.DataFrame): Input panel dataframe.
-        outcome_col (str): Outcome column.
-        unit_column (str, optional): Unit identifier column.
-        time_column (str, optional): Time column.
-        treatment_column (str, optional): Treatment indicator column.
-        post_column (str, optional): Post-period indicator column.
-
-    Returns:
-        float: Unit regularization value zeta.
-    """
-    for column in [unit_column, time_column, treatment_column, post_column, outcome_col]:
-        if column not in panel.columns:
-            raise ValueError(f"Column '{column}' is not present in panel.")
-
-    n_treated_post = int(
-        (
-            (panel[treatment_column].astype(int) == 1)
-            & (panel[post_column].astype(int) == 1)
-        ).sum()
-    )
-    if n_treated_post <= 0:
-        raise ValueError("Need treated-post observations to calculate regularization.")
-    sigma_hat = calculate_sigma_hat(
-        panel=panel,
-        outcome_col=outcome_col,
-        unit_column=unit_column,
-        time_column=time_column,
-        treatment_column=treatment_column,
-        post_column=post_column,
-    )
-    return float((n_treated_post**0.25) * sigma_hat)
-
 
 def residualize_outcome(
     panel: pd.DataFrame,
@@ -591,62 +275,14 @@ class SyntheticDifferenceInDifferences:
         Returns:
             None
         """
-        prepared = self.data.copy()
-        required_columns = [
-            self.outcome_column,
-            self.unit_column,
-            self.time_column,
-            self.treatment_column,
-            self.post_column,
-        ]
-        prepared = prepared.dropna(
-            subset=required_columns
+        self.data = _prepare_sdid_panel(
+            data=self.data,
+            outcome_column=self.outcome_column,
+            unit_column=self.unit_column,
+            time_column=self.time_column,
+            treatment_column=self.treatment_column,
+            post_column=self.post_column,
         )
-        if prepared.empty:
-            raise ValueError("No rows left after dropping NaN in required columns.")
-
-        if not pd.api.types.is_numeric_dtype(prepared[self.outcome_column]):
-            raise ValueError(f"Column '{self.outcome_column}' should be numeric.")
-
-        prepared[self.unit_column] = prepared[self.unit_column].astype(str)
-        prepared[self.treatment_column] = prepared[self.treatment_column].astype(int)
-        prepared[self.post_column] = prepared[self.post_column].astype(int)
-
-        _validate_binary_column(prepared, self.treatment_column)
-        _validate_binary_column(prepared, self.post_column)
-
-        cell_uniques = prepared.groupby(
-            [self.unit_column, self.time_column], as_index=False
-        )[[self.treatment_column, self.post_column]].nunique()
-        inconsistent_cells = cell_uniques[
-            (cell_uniques[self.treatment_column] > 1)
-            | (cell_uniques[self.post_column] > 1)
-        ]
-        if not inconsistent_cells.empty:
-            raise ValueError(
-                "Columns treatment/post should be constant within each unit-time cell."
-            )
-
-        passthrough_columns = [
-            column
-            for column in prepared.columns
-            if column not in required_columns
-        ]
-        aggregations: dict[str, str] = {
-            self.outcome_column: "mean",
-            self.treatment_column: "first",
-            self.post_column: "first",
-        }
-        for column in passthrough_columns:
-            aggregations[column] = "first"
-
-        aggregated = (
-            prepared.groupby([self.unit_column, self.time_column], as_index=False)
-            .agg(aggregations)
-            .sort_values([self.time_column, self.unit_column])
-            .reset_index(drop=True)
-        )
-        self.data = aggregated
 
     def __fit_unit_weights(
         self,
@@ -666,73 +302,16 @@ class SyntheticDifferenceInDifferences:
         Returns:
             tuple[pd.Series, float]: Unit weights and unit regularization value.
         """
-        pre_data = panel[panel[self.post_column] == 0].copy()
-        control_pre = pre_data[pre_data[self.treatment_column] == 0]
-        treated_pre = pre_data[pre_data[self.treatment_column] == 1]
-
-        if control_pre.empty:
-            raise ValueError("No control units in pre-period. Cannot fit unit weights.")
-        if treated_pre.empty:
-            raise ValueError("No treated units in pre-period. Cannot fit unit weights.")
-
-        y_pre_control = (
-            control_pre.pivot(
-                index=self.time_column, columns=self.unit_column, values=outcome_column
-            )
-            .sort_index(axis=0)
-            .sort_index(axis=1)
-        )
-        valid_control_columns = y_pre_control.columns[y_pre_control.notna().any(axis=0)]
-        y_pre_control = y_pre_control.loc[:, valid_control_columns]
-
-        if y_pre_control.empty:
-            raise ValueError("No control units with observed pre-period outcome.")
-
-        if y_pre_control.isna().sum().sum() > 0:
-            y_pre_control = y_pre_control.apply(
-                lambda series: series.fillna(
-                    series.mean() if pd.notna(series.mean()) else 0.0
-                )
-            )
-
-        y_pre_treated_mean = (
-            treated_pre.groupby(self.time_column)[outcome_column]
-            .mean()
-            .reindex(y_pre_control.index)
-        )
-        if y_pre_treated_mean.isna().sum() > 0:
-            mean_value = y_pre_treated_mean.mean()
-            y_pre_treated_mean = y_pre_treated_mean.fillna(
-                mean_value if pd.notna(mean_value) else 0.0
-            )
-
-        if not np.isfinite(y_pre_control.to_numpy()).all():
-            raise ValueError("NaN/inf in control pre-treatment matrix after processing.")
-        if not np.isfinite(y_pre_treated_mean.to_numpy()).all():
-            raise ValueError("NaN/inf in treated pre-treatment mean after processing.")
-
-        zeta = calculate_regularization(
+        return _fit_unit_weights_core(
             panel=panel,
-            outcome_col=outcome_column,
+            outcome_column=outcome_column,
             unit_column=self.unit_column,
             time_column=self.time_column,
             treatment_column=self.treatment_column,
             post_column=self.post_column,
+            optimizer_max_iter=optimizer_max_iter,
+            optimizer_tolerance=optimizer_tolerance,
         )
-        ridge_penalty = float(y_pre_control.shape[0] * (zeta**2))
-
-        _, unit_weights = _solve_simplex_with_intercept(
-            design_matrix=y_pre_control.to_numpy(dtype=float),
-            target=y_pre_treated_mean.to_numpy(dtype=float),
-            ridge_penalty=ridge_penalty,
-            max_iter=optimizer_max_iter,
-            tolerance=optimizer_tolerance,
-        )
-        return pd.Series(
-            unit_weights,
-            index=y_pre_control.columns,
-            name="unit_weight",
-        ), zeta
 
     def __fit_time_weights(
         self,
@@ -754,69 +333,17 @@ class SyntheticDifferenceInDifferences:
         Returns:
             tuple[pd.Series, float]: Time weights and time regularization value.
         """
-        control = panel[panel[self.treatment_column] == 0].copy()
-        control_pre = control[control[self.post_column] == 0]
-        control_post = control[control[self.post_column] == 1]
-
-        if control_pre.empty:
-            raise ValueError("No control observations in pre-period for time weights.")
-        if control_post.empty:
-            raise ValueError("No control observations in post-period for time weights.")
-
-        y_pre = (
-            control_pre.pivot(
-                index=self.time_column, columns=self.unit_column, values=outcome_column
-            )
-            .sort_index(axis=0)
-            .sort_index(axis=1)
-        )
-        y_post_mean = (
-            control_post.groupby(self.unit_column)[outcome_column]
-            .mean()
-            .reindex(y_pre.columns)
-        )
-
-        valid_columns = y_post_mean[y_post_mean.notna()].index
-        y_pre = y_pre.loc[:, valid_columns]
-        y_post_mean = y_post_mean.loc[valid_columns]
-
-        if y_pre.empty:
-            raise ValueError("No control units with observed post-period outcome.")
-
-        if y_pre.isna().sum().sum() > 0:
-            y_pre = y_pre.apply(
-                lambda series: series.fillna(
-                    series.mean() if pd.notna(series.mean()) else 0.0
-                )
-            )
-        if not np.isfinite(y_pre.to_numpy()).all():
-            raise ValueError("NaN/inf in control pre matrix after processing.")
-        if not np.isfinite(y_post_mean.to_numpy()).all():
-            raise ValueError("NaN/inf in control post mean after processing.")
-
-        time_regularization = calculate_time_regularization(
+        return _fit_time_weights_core(
             panel=panel,
-            outcome_col=outcome_column,
+            outcome_column=outcome_column,
             unit_column=self.unit_column,
             time_column=self.time_column,
             treatment_column=self.treatment_column,
             post_column=self.post_column,
-            ridge_scale=time_weight_ridge_scale,
+            time_weight_ridge_scale=time_weight_ridge_scale,
+            optimizer_max_iter=optimizer_max_iter,
+            optimizer_tolerance=optimizer_tolerance,
         )
-        ridge_penalty = float(y_pre.shape[1] * (time_regularization**2))
-
-        _, time_weights = _solve_simplex_with_intercept(
-            design_matrix=y_pre.to_numpy(dtype=float).T,
-            target=y_post_mean.to_numpy(dtype=float),
-            ridge_penalty=ridge_penalty,
-            max_iter=optimizer_max_iter,
-            tolerance=optimizer_tolerance,
-        )
-        return pd.Series(
-            time_weights,
-            index=y_pre.index,
-            name="time_weight",
-        ), time_regularization
 
     def __join_weights(
         self,
@@ -834,39 +361,278 @@ class SyntheticDifferenceInDifferences:
         Returns:
             pd.DataFrame: Panel with unit/time/sdid weights columns.
         """
-        weighted = panel.copy()
-        n_treated_units = int(
-            weighted.loc[weighted[self.treatment_column] == 1, self.unit_column].nunique()
-        )
-        n_post_periods = int(
-            weighted.loc[weighted[self.post_column] == 1, self.time_column].nunique()
-        )
-        if n_treated_units == 0:
-            raise ValueError("No treated units available to fill treated weights.")
-        if n_post_periods == 0:
-            raise ValueError("No post periods available to fill post time weights.")
-
-        weighted = weighted.merge(
-            unit_weights.rename("unit_weight"),
-            left_on=self.unit_column,
-            right_index=True,
-            how="left",
-        )
-        weighted = weighted.merge(
-            time_weights.rename("time_weight"),
-            left_on=self.time_column,
-            right_index=True,
-            how="left",
+        return _join_sdid_weights_core(
+            panel=panel,
+            unit_weights=unit_weights,
+            time_weights=time_weights,
+            unit_column=self.unit_column,
+            time_column=self.time_column,
+            treatment_column=self.treatment_column,
+            post_column=self.post_column,
         )
 
-        weighted["unit_weight"] = weighted["unit_weight"].fillna(1.0 / n_treated_units)
-        weighted["time_weight"] = weighted["time_weight"].fillna(1.0 / n_post_periods)
-        weighted["unit_weight"] = weighted["unit_weight"].clip(lower=0.0)
-        weighted["time_weight"] = weighted["time_weight"].clip(lower=0.0)
-        weighted["sdid_weight"] = (
-            weighted["unit_weight"] * weighted["time_weight"]
-        ).clip(lower=1e-12)
-        return weighted
+    def __validate_fit_arguments(
+        self,
+        alpha: float,
+        time_weight_ridge_scale: float,
+        cluster_column: str | None,
+        optimizer_max_iter: int,
+        optimizer_tolerance: float,
+    ) -> None:
+        """Validate user-facing fit arguments before estimation.
+
+        Args:
+            alpha (float): Significance level for confidence interval.
+            time_weight_ridge_scale (float): Time-weight regularization scale.
+            cluster_column (str | None): Optional cluster column.
+            optimizer_max_iter (int): Maximum SLSQP iterations.
+            optimizer_tolerance (float): SLSQP function tolerance.
+
+        Returns:
+            None
+        """
+        if not (0 < alpha < 1):
+            raise ValueError(f"alpha should be in (0, 1); got {alpha}.")
+        if time_weight_ridge_scale < 0:
+            raise ValueError(
+                "time_weight_ridge_scale should be non-negative, "
+                f"got {time_weight_ridge_scale}."
+            )
+        if optimizer_max_iter <= 0:
+            raise ValueError(
+                f"optimizer_max_iter should be positive, got {optimizer_max_iter}."
+            )
+        if optimizer_tolerance <= 0:
+            raise ValueError(
+                f"optimizer_tolerance should be positive, got {optimizer_tolerance}."
+            )
+        if cluster_column is not None and cluster_column not in self.data.columns:
+            raise ValueError(f"Column '{cluster_column}' not found in data.")
+
+    def __prepare_fit_panel(
+        self,
+        covariate_columns: list[str] | None,
+    ) -> tuple[pd.DataFrame, str, dict[str, Any] | None, list[str]]:
+        """Prepare panel and optionally residualize outcome for fit().
+
+        Args:
+            covariate_columns (list[str] | None): Optional residualization covariates.
+
+        Returns:
+            tuple[pd.DataFrame, str, dict[str, Any] | None, list[str]]: Prepared panel,
+                model outcome column, residualization metadata and normalized covariates.
+        """
+        panel = self.data.copy()
+        normalized_covariates = list(covariate_columns or [])
+        model_outcome_column = self.outcome_column
+        residualization_model: dict[str, Any] | None = None
+        if normalized_covariates:
+            panel, model_outcome_column, residualization_model = residualize_outcome(
+                panel=panel,
+                outcome_col=self.outcome_column,
+                covariate_cols=normalized_covariates,
+                treatment_column=self.treatment_column,
+                post_column=self.post_column,
+                residual_col=f"{self.outcome_column}_resid",
+            )
+        return panel, model_outcome_column, residualization_model, normalized_covariates
+
+    def __build_regression_inputs(
+        self,
+        weighted_data: pd.DataFrame,
+        outcome_column: str,
+        use_fixed_effects: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        """Build weighted regression design matrix and vectors.
+
+        Args:
+            weighted_data (pd.DataFrame): Panel with SDID weights.
+            outcome_column (str): Outcome column used in final regression.
+            use_fixed_effects (bool): Whether to include unit/time fixed effects.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray, np.ndarray, int]: Design matrix X, outcome y,
+                weights w and effect-coefficient index.
+        """
+        d = weighted_data[self.treatment_column].astype(float).to_numpy()
+        t = weighted_data[self.post_column].astype(float).to_numpy()
+        y = weighted_data[outcome_column].astype(float).to_numpy()
+        w = weighted_data["sdid_weight"].astype(float).to_numpy()
+
+        interaction = d * t
+        if use_fixed_effects:
+            unit_dummies = pd.get_dummies(
+                weighted_data[self.unit_column].astype(str),
+                drop_first=True,
+                dtype=float,
+            )
+            time_dummies = pd.get_dummies(
+                weighted_data[self.time_column],
+                drop_first=True,
+                dtype=float,
+            )
+            X_df = pd.concat(
+                [
+                    pd.Series(np.ones_like(d), name="intercept"),
+                    pd.Series(interaction, name="treated_post"),
+                    unit_dummies.reset_index(drop=True),
+                    time_dummies.reset_index(drop=True),
+                ],
+                axis=1,
+            )
+            X = X_df.to_numpy(dtype=float)
+            effect_index = 1
+        else:
+            X = np.column_stack([np.ones_like(d), d, t, interaction])
+            effect_index = 3
+        return X, y, w, effect_index
+
+    def __estimate_weighted_regression(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        w: np.ndarray,
+        effect_index: int,
+        alpha: float,
+        cluster_by_unit: bool,
+        cluster_column: str | None,
+        weighted_data: pd.DataFrame,
+    ) -> _SdidInferenceSummary:
+        """Estimate weighted regression and build inference summary.
+
+        Args:
+            X (np.ndarray): Design matrix.
+            y (np.ndarray): Outcome vector.
+            w (np.ndarray): Observation weights.
+            effect_index (int): Index of treatment effect coefficient in beta.
+            alpha (float): Significance level.
+            cluster_by_unit (bool): Whether to use clustered standard errors.
+            cluster_column (str | None): Optional cluster column.
+            weighted_data (pd.DataFrame): Panel with SDID weights and identifiers.
+
+        Returns:
+            _SdidInferenceSummary: Weighted-regression inference outputs.
+        """
+        n_obs, n_params = X.shape
+        if n_obs <= n_params:
+            raise ValueError(
+                f"Need more observations than parameters for inference, got n={n_obs}."
+            )
+
+        xtwx = X.T @ (X * w[:, None])
+        xtwx_inv = np.linalg.pinv(xtwx)
+        beta = xtwx_inv @ (X.T @ (w * y))
+        residuals = y - X @ beta
+        sigma2 = float((w * np.square(residuals)).sum() / (n_obs - n_params))
+
+        effective_cluster_column: str | None = None
+        used_clustered_se = False
+        if cluster_by_unit:
+            effective_cluster_column = cluster_column or self.unit_column
+            clusters = weighted_data[effective_cluster_column].astype(str).to_numpy()
+            covariance_candidate, n_clusters = _cluster_robust_covariance(
+                X=X,
+                residuals=residuals,
+                weights=w,
+                clusters=clusters,
+            )
+            if n_clusters > 1:
+                cov = covariance_candidate
+                inference_df = int(n_clusters - 1)
+                used_clustered_se = True
+            else:
+                cov = sigma2 * xtwx_inv
+                inference_df = int(n_obs - n_params)
+        else:
+            cov = sigma2 * xtwx_inv
+            inference_df = int(n_obs - n_params)
+
+        variance = float(cov[effect_index, effect_index])
+        std_error = float(np.sqrt(max(0.0, variance)))
+        estimate = float(beta[effect_index])
+        if np.isclose(std_error, 0.0):
+            t_stat = np.nan
+            pvalue = np.nan
+            ci_delta = np.nan
+        else:
+            t_stat = float(estimate / std_error)
+            pvalue = float(2 * (1 - stats.t.cdf(abs(t_stat), df=inference_df)))
+            ci_delta = float(stats.t.ppf(1 - alpha / 2, df=inference_df) * std_error)
+
+        return _SdidInferenceSummary(
+            estimate=estimate,
+            std_error=std_error,
+            t_statistic=t_stat,
+            pvalue=pvalue,
+            ci_lower=float(estimate - ci_delta),
+            ci_upper=float(estimate + ci_delta),
+            inference_df=int(inference_df),
+            used_clustered_se=used_clustered_se,
+            cluster_column=effective_cluster_column,
+        )
+
+    def __compute_cell_metrics(
+        self,
+        weighted_data: pd.DataFrame,
+        outcome_column: str,
+    ) -> _SdidCellMetrics:
+        """Compute weighted 2x2 means and naive/controlled effect decomposition.
+
+        Args:
+            weighted_data (pd.DataFrame): Panel with SDID weights.
+            outcome_column (str): Outcome column used in final regression.
+
+        Returns:
+            _SdidCellMetrics: Weighted group means and derived metrics.
+        """
+        treated_pre = _safe_weighted_mean(
+            weighted_data,
+            (weighted_data[self.treatment_column] == 1)
+            & (weighted_data[self.post_column] == 0),
+            outcome_column,
+            "sdid_weight",
+        )
+        treated_post = _safe_weighted_mean(
+            weighted_data,
+            (weighted_data[self.treatment_column] == 1)
+            & (weighted_data[self.post_column] == 1),
+            outcome_column,
+            "sdid_weight",
+        )
+        control_pre = _safe_weighted_mean(
+            weighted_data,
+            (weighted_data[self.treatment_column] == 0)
+            & (weighted_data[self.post_column] == 0),
+            outcome_column,
+            "sdid_weight",
+        )
+        control_post = _safe_weighted_mean(
+            weighted_data,
+            (weighted_data[self.treatment_column] == 0)
+            & (weighted_data[self.post_column] == 1),
+            outcome_column,
+            "sdid_weight",
+        )
+
+        treated_change = float(treated_post - treated_pre)
+        control_change = float(control_post - control_pre)
+        naive_post_period_comparison = float(treated_post - control_post)
+        counterfactual_treated_post = float(treated_pre + control_change)
+        group_means = pd.DataFrame(
+            {
+                "group": ["control", "control", "treated", "treated"],
+                "post_period": [0, 1, 0, 1],
+                "mean_outcome": [control_pre, control_post, treated_pre, treated_post],
+            }
+        )
+        return _SdidCellMetrics(
+            group_means=group_means,
+            counterfactual_treated_post=counterfactual_treated_post,
+            treated_change=treated_change,
+            control_change=control_change,
+            naive_before_after=treated_change,
+            naive_post_period_comparison=naive_post_period_comparison,
+        )
 
     def fit(
         self,
@@ -896,37 +662,16 @@ class SyntheticDifferenceInDifferences:
         Returns:
             SyntheticDifferenceInDifferencesResult: Estimated effect and diagnostics.
         """
-        if not (0 < alpha < 1):
-            raise ValueError(f"alpha should be in (0, 1); got {alpha}.")
-        if time_weight_ridge_scale < 0:
-            raise ValueError(
-                "time_weight_ridge_scale should be non-negative, "
-                f"got {time_weight_ridge_scale}."
-            )
-        if optimizer_max_iter <= 0:
-            raise ValueError(
-                f"optimizer_max_iter should be positive, got {optimizer_max_iter}."
-            )
-        if optimizer_tolerance <= 0:
-            raise ValueError(
-                f"optimizer_tolerance should be positive, got {optimizer_tolerance}."
-            )
-        if cluster_column is not None and cluster_column not in self.data.columns:
-            raise ValueError(f"Column '{cluster_column}' not found in data.")
-
-        panel = self.data.copy()
-        covariate_columns = covariate_columns or []
-        model_outcome_column = self.outcome_column
-        residualization_model: dict[str, Any] | None = None
-        if covariate_columns:
-            panel, model_outcome_column, residualization_model = residualize_outcome(
-                panel=panel,
-                outcome_col=self.outcome_column,
-                covariate_cols=covariate_columns,
-                treatment_column=self.treatment_column,
-                post_column=self.post_column,
-                residual_col=f"{self.outcome_column}_resid",
-            )
+        self.__validate_fit_arguments(
+            alpha=alpha,
+            time_weight_ridge_scale=time_weight_ridge_scale,
+            cluster_column=cluster_column,
+            optimizer_max_iter=optimizer_max_iter,
+            optimizer_tolerance=optimizer_tolerance,
+        )
+        panel, model_outcome_column, residualization_model, normalized_covariates = (
+            self.__prepare_fit_panel(covariate_columns=covariate_columns)
+        )
 
         unit_weights, unit_regularization = self.__fit_unit_weights(
             panel=panel,
@@ -947,154 +692,55 @@ class SyntheticDifferenceInDifferences:
             time_weights=time_weights,
         )
 
-        d = weighted_data[self.treatment_column].astype(float).to_numpy()
-        t = weighted_data[self.post_column].astype(float).to_numpy()
-        y = weighted_data[model_outcome_column].astype(float).to_numpy()
-        w = weighted_data["sdid_weight"].astype(float).to_numpy()
-
-        interaction = d * t
-        if use_fixed_effects:
-            unit_dummies = pd.get_dummies(
-                weighted_data[self.unit_column].astype(str),
-                drop_first=True,
-                dtype=float,
-            )
-            time_dummies = pd.get_dummies(
-                weighted_data[self.time_column],
-                drop_first=True,
-                dtype=float,
-            )
-            X_df = pd.concat(
-                [
-                    pd.Series(np.ones_like(d), name="intercept"),
-                    pd.Series(interaction, name="treated_post"),
-                    unit_dummies.reset_index(drop=True),
-                    time_dummies.reset_index(drop=True),
-                ],
-                axis=1,
-            )
-            X = X_df.to_numpy(dtype=float)
-            effect_index = 1
-        else:
-            X = np.column_stack([np.ones_like(d), d, t, interaction])
-            effect_index = 3
-
-        n_obs, n_params = X.shape
-        if n_obs <= n_params:
-            raise ValueError(
-                f"Need more observations than parameters for inference, got n={n_obs}."
-            )
-
-        xtwx = X.T @ (X * w[:, None])
-        xtwx_inv = np.linalg.pinv(xtwx)
-        beta = xtwx_inv @ (X.T @ (w * y))
-        residuals = y - X @ beta
-        sigma2 = float((w * np.square(residuals)).sum() / (n_obs - n_params))
-        effective_cluster_column: str | None = None
-        used_clustered_se = False
-        if cluster_by_unit:
-            effective_cluster_column = cluster_column or self.unit_column
-            clusters = weighted_data[effective_cluster_column].astype(str).to_numpy()
-            covariance_candidate, n_clusters = _cluster_robust_covariance(
-                X=X,
-                residuals=residuals,
-                weights=w,
-                clusters=clusters,
-            )
-            if n_clusters > 1:
-                cov = covariance_candidate
-                inference_df = int(n_clusters - 1)
-                used_clustered_se = True
-            else:
-                cov = sigma2 * xtwx_inv
-                inference_df = int(n_obs - n_params)
-        else:
-            cov = sigma2 * xtwx_inv
-            inference_df = int(n_obs - n_params)
-
-        variance = float(cov[effect_index, effect_index])
-        std_error = float(np.sqrt(max(0.0, variance)))
-        estimate = float(beta[effect_index])
-
-        if np.isclose(std_error, 0.0):
-            t_stat = np.nan
-            pvalue = np.nan
-            ci_delta = np.nan
-        else:
-            t_stat = float(estimate / std_error)
-            pvalue = float(2 * (1 - stats.t.cdf(abs(t_stat), df=inference_df)))
-            ci_delta = float(stats.t.ppf(1 - alpha / 2, df=inference_df) * std_error)
-
-        treated_pre = _safe_weighted_mean(
-            weighted_data,
-            (weighted_data[self.treatment_column] == 1)
-            & (weighted_data[self.post_column] == 0),
-            model_outcome_column,
-            "sdid_weight",
+        X, y, w, effect_index = self.__build_regression_inputs(
+            weighted_data=weighted_data,
+            outcome_column=model_outcome_column,
+            use_fixed_effects=use_fixed_effects,
         )
-        treated_post = _safe_weighted_mean(
-            weighted_data,
-            (weighted_data[self.treatment_column] == 1)
-            & (weighted_data[self.post_column] == 1),
-            model_outcome_column,
-            "sdid_weight",
+        inference = self.__estimate_weighted_regression(
+            X=X,
+            y=y,
+            w=w,
+            effect_index=effect_index,
+            alpha=alpha,
+            cluster_by_unit=cluster_by_unit,
+            cluster_column=cluster_column,
+            weighted_data=weighted_data,
         )
-        control_pre = _safe_weighted_mean(
-            weighted_data,
-            (weighted_data[self.treatment_column] == 0)
-            & (weighted_data[self.post_column] == 0),
-            model_outcome_column,
-            "sdid_weight",
+        cell_metrics = self.__compute_cell_metrics(
+            weighted_data=weighted_data,
+            outcome_column=model_outcome_column,
         )
-        control_post = _safe_weighted_mean(
-            weighted_data,
-            (weighted_data[self.treatment_column] == 0)
-            & (weighted_data[self.post_column] == 1),
-            model_outcome_column,
-            "sdid_weight",
-        )
-
-        group_means = pd.DataFrame(
-            {
-                "group": ["control", "control", "treated", "treated"],
-                "post_period": [0, 1, 0, 1],
-                "mean_outcome": [control_pre, control_post, treated_pre, treated_post],
-            }
-        )
-        treated_change = float(treated_post - treated_pre)
-        control_change = float(control_post - control_pre)
-        naive_before_after = treated_change
-        naive_post_period_comparison = float(treated_post - control_post)
-        counterfactual_treated_post = float(treated_pre + control_change)
+        n_obs = int(X.shape[0])
 
         result = SyntheticDifferenceInDifferencesResult(
-            estimate=estimate,
-            std_error=std_error,
-            t_statistic=t_stat,
-            pvalue=pvalue,
-            ci_lower=float(estimate - ci_delta),
-            ci_upper=float(estimate + ci_delta),
+            estimate=inference.estimate,
+            std_error=inference.std_error,
+            t_statistic=inference.t_statistic,
+            pvalue=inference.pvalue,
+            ci_lower=inference.ci_lower,
+            ci_upper=inference.ci_upper,
             alpha=alpha,
-            n_obs=int(n_obs),
+            n_obs=n_obs,
             unit_weights=unit_weights.sort_values(ascending=False),
             time_weights=time_weights.sort_index(),
             weighted_data=weighted_data,
-            group_means=group_means,
-            counterfactual_treated_post=counterfactual_treated_post,
-            treated_change=treated_change,
-            control_change=control_change,
-            naive_before_after=naive_before_after,
-            naive_post_period_comparison=naive_post_period_comparison,
+            group_means=cell_metrics.group_means,
+            counterfactual_treated_post=cell_metrics.counterfactual_treated_post,
+            treated_change=cell_metrics.treated_change,
+            control_change=cell_metrics.control_change,
+            naive_before_after=cell_metrics.naive_before_after,
+            naive_post_period_comparison=cell_metrics.naive_post_period_comparison,
             unit_regularization=unit_regularization,
             time_regularization=time_regularization,
             model_outcome_column=model_outcome_column,
-            residualized=bool(covariate_columns),
-            covariate_columns=list(covariate_columns),
+            residualized=bool(normalized_covariates),
+            covariate_columns=normalized_covariates,
             residualization_model=residualization_model,
             used_fixed_effects=use_fixed_effects,
-            used_clustered_se=used_clustered_se,
-            cluster_column=effective_cluster_column,
-            inference_df=int(inference_df),
+            used_clustered_se=inference.used_clustered_se,
+            cluster_column=inference.cluster_column,
+            inference_df=inference.inference_df,
         )
         self.latest_result = result
         return result
@@ -1227,15 +873,15 @@ class SyntheticDifferenceInDifferences:
                 (self.data[self.post_column] == 0)
                 | (self.data[self.time_column] == period)
             ].copy()
-            period_model = SyntheticDifferenceInDifferences(
+            # Reuse one-shot API to keep period-level fitting path aligned
+            # with the main SDID estimator behavior.
+            period_result = synthetic_difference_in_differences(
                 data=period_data,
                 outcome_column=self.outcome_column,
                 unit_column=self.unit_column,
                 time_column=self.time_column,
                 treatment_column=self.treatment_column,
                 post_column=self.post_column,
-            )
-            period_result = period_model.fit(
                 alpha=alpha,
                 time_weight_ridge_scale=time_weight_ridge_scale,
                 covariate_columns=covariate_columns,
@@ -1389,7 +1035,7 @@ def fit_unit_weights(
     Returns:
         pd.Series: Estimated unit weights indexed by control units.
     """
-    sdid = SyntheticDifferenceInDifferences(
+    prepared_panel = _prepare_sdid_panel(
         data=panel,
         outcome_column=outcome_col,
         unit_column=unit_column,
@@ -1397,9 +1043,13 @@ def fit_unit_weights(
         treatment_column=treatment_column,
         post_column=post_column,
     )
-    unit_weights, _ = sdid._SyntheticDifferenceInDifferences__fit_unit_weights(
-        panel=sdid.data.copy(),
+    unit_weights, _ = _fit_unit_weights_core(
+        panel=prepared_panel,
         outcome_column=outcome_col,
+        unit_column=unit_column,
+        time_column=time_column,
+        treatment_column=treatment_column,
+        post_column=post_column,
         optimizer_max_iter=optimizer_max_iter,
         optimizer_tolerance=optimizer_tolerance,
     )
@@ -1433,7 +1083,7 @@ def fit_time_weights(
     Returns:
         pd.Series: Estimated time weights indexed by pre-period timestamps.
     """
-    sdid = SyntheticDifferenceInDifferences(
+    prepared_panel = _prepare_sdid_panel(
         data=panel,
         outcome_column=outcome_col,
         unit_column=unit_column,
@@ -1444,7 +1094,7 @@ def fit_time_weights(
     ridge_scale = 1e-6
     if zeta_time_small is not None:
         sigma_hat = calculate_sigma_hat(
-            panel=sdid.data,
+            panel=prepared_panel,
             outcome_col=outcome_col,
             unit_column=unit_column,
             time_column=time_column,
@@ -1452,9 +1102,13 @@ def fit_time_weights(
             post_column=post_column,
         )
         ridge_scale = 0.0 if np.isclose(sigma_hat, 0.0) else float(zeta_time_small / sigma_hat)
-    time_weights, _ = sdid._SyntheticDifferenceInDifferences__fit_time_weights(
-        panel=sdid.data.copy(),
+    time_weights, _ = _fit_time_weights_core(
+        panel=prepared_panel,
         outcome_column=outcome_col,
+        unit_column=unit_column,
+        time_column=time_column,
+        treatment_column=treatment_column,
+        post_column=post_column,
         time_weight_ridge_scale=ridge_scale,
         optimizer_max_iter=optimizer_max_iter,
         optimizer_tolerance=optimizer_tolerance,
@@ -1491,7 +1145,7 @@ def join_sdid_weights(
         # outcome value is not needed for merge itself, but class constructor validates it.
         panel = panel.copy()
         panel[outcome_column] = 0.0
-    sdid = SyntheticDifferenceInDifferences(
+    prepared_panel = _prepare_sdid_panel(
         data=panel,
         outcome_column=outcome_column,
         unit_column=unit_column,
@@ -1499,10 +1153,14 @@ def join_sdid_weights(
         treatment_column=treatment_column,
         post_column=post_column,
     )
-    return sdid._SyntheticDifferenceInDifferences__join_weights(
-        panel=sdid.data.copy(),
+    return _join_sdid_weights_core(
+        panel=prepared_panel,
         unit_weights=unit_weights,
         time_weights=time_weights,
+        unit_column=unit_column,
+        time_column=time_column,
+        treatment_column=treatment_column,
+        post_column=post_column,
     )
 
 
@@ -1711,15 +1369,14 @@ def fit_staggered_sdid(
         cohort_panel = cohort_panel.drop(columns=["_cohort_start"])
 
         try:
-            cohort_model = SyntheticDifferenceInDifferences(
+            # Reuse one-shot API to avoid duplicating class-construction + fit logic.
+            cohort_result = synthetic_difference_in_differences(
                 data=cohort_panel,
                 outcome_column=outcome_col,
                 unit_column=unit_column,
                 time_column=time_column,
                 treatment_column="cohort_treated",
                 post_column="cohort_post",
-            )
-            cohort_result = cohort_model.fit(
                 alpha=alpha,
                 time_weight_ridge_scale=time_weight_ridge_scale,
                 covariate_columns=covariate_cols,
