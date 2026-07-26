@@ -11,7 +11,7 @@ from typing import Iterable, Union
 import numpy as np
 import pandas as pd
 
-from cib_advanced_experiments.model import SynthControlModel
+from causal_loom.model import SynthControlModel
 
 DateLike = Union[str, datetime.datetime, pd.Timestamp]
 NullLike = Union[float, int, np.ndarray, list[float]]

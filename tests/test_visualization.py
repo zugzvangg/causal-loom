@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from cib_advanced_experiments.visualization import (
+from causal_loom.visualization import (
     create_conformal_ci_band_figure,
     create_conformal_dashboard_figure,
     create_conformal_p_value_grid_figure,

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cib_advanced_experiments.synthetic_control import SyntheticControl
+from causal_loom.synthetic_control import SyntheticControl
 
 
 def test_synthetic_control_uses_external_feature_matching():

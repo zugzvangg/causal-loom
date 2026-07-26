@@ -1,6 +1,6 @@
-"""Top-level package exports."""
+"""CausalLoom's top-level package exports."""
 
-from cib_advanced_experiments.conformal_inference import (
+from causal_loom.conformal_inference import (
     conformal_confidence_interval,
     conformal_confidence_interval_from_p_values,
     conformal_p_value,
@@ -9,34 +9,34 @@ from cib_advanced_experiments.conformal_inference import (
     conformal_residuals,
     conformal_test_statistic,
 )
-from cib_advanced_experiments.difference_in_differences import (
+from causal_loom.difference_in_differences import (
     DifferenceInDifferences,
     DifferenceInDifferencesResult,
     difference_in_differences,
 )
-from cib_advanced_experiments.experiment import (
+from causal_loom.experiment import (
     Experiment,
     ExperimentResult,
     FitFailureResult,
     FittedSyntheticControlResult,
 )
-from cib_advanced_experiments.matching import (
+from causal_loom.matching import (
     MatchingResult,
     select_control_group_by_features,
 )
-from cib_advanced_experiments.model import SynthControlModel
-from cib_advanced_experiments.preprocessing import (
+from causal_loom.model import SynthControlModel
+from causal_loom.preprocessing import (
     ConformalFrame,
     build_conformal_frame,
     prepare_panel_data,
 )
-from cib_advanced_experiments.propensity_score_matching import (
+from causal_loom.propensity_score_matching import (
     PropensityScoreMatchingResult,
     propensity_score_match,
     select_control_group_by_propensity_from_panel,
 )
-from cib_advanced_experiments.synthetic_control import PlaceboResult, SyntheticControl
-from cib_advanced_experiments.synthetic_difference_in_differences import (
+from causal_loom.synthetic_control import PlaceboResult, SyntheticControl
+from causal_loom.synthetic_difference_in_differences import (
     StaggeredSyntheticDifferenceInDifferencesResult,
     SyntheticDifferenceInDifferences,
     SyntheticDifferenceInDifferencesResult,
@@ -51,7 +51,7 @@ from cib_advanced_experiments.synthetic_difference_in_differences import (
     residualize_outcome,
     synthetic_difference_in_differences,
 )
-from cib_advanced_experiments.visualization import (
+from causal_loom.visualization import (
     create_conformal_ci_band_figure,
     create_conformal_dashboard_figure,
     create_conformal_p_value_grid_figure,

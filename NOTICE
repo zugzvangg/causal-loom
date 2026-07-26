@@ -1,0 +1,9 @@
+CausalLoom
+Copyright 2026 Dmitriy Bazanov
+
+This product includes material adapted from "Causal Inference for the Brave
+and True" / python-causality-handbook by Matheus Facure, copyright (c) 2020
+Matheus Facure, used under the MIT License.
+
+The complete third-party attribution, license text, and bundled-data
+provenance are provided in THIRD_PARTY_NOTICES.md.

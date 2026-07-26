@@ -1,0 +1,12 @@
+include CHANGELOG.md
+include CITATION.cff
+include CODE_OF_CONDUCT.md
+include CONTRIBUTING.md
+include README.ru.md
+include SECURITY.md
+
+recursive-include notebooks *.csv *.ipynb *.md
+recursive-include tests *.py
+
+prune notebooks/.ipynb_checkpoints
+global-exclude .DS_Store

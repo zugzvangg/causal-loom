@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "CausalLoom: practical causal inference in Python"
+type: software
+authors:
+  - family-names: "Bazanov"
+    given-names: "Dmitriy"
+    alias: "zugzvangg"
+version: "0.1.0"
+date-released: "2026-07-26"
+license: "Apache-2.0"
+repository-code: "https://github.com/zugzvangg/causal-loom"
+url: "https://github.com/zugzvangg/causal-loom"
+keywords:
+  - "causal inference"
+  - "synthetic control"
+  - "difference-in-differences"
+  - "synthetic difference-in-differences"
+  - "conformal inference"

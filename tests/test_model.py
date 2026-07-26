@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from cib_advanced_experiments.model import SynthControlModel
+from causal_loom.model import SynthControlModel
 
 
 def test_fit_outputs_weights_and_loss_cpu():

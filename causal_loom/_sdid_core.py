@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from cib_advanced_experiments._did_utils import validate_binary_column
-from cib_advanced_experiments.model import SynthControlModel
+from causal_loom._did_utils import validate_binary_column
+from causal_loom.model import SynthControlModel
 
 
 @dataclass(frozen=True)

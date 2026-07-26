@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cib_advanced_experiments.experiment import Experiment, ExperimentResult
-from cib_advanced_experiments.synthetic_control import SyntheticControl
+from causal_loom.experiment import Experiment, ExperimentResult
+from causal_loom.synthetic_control import SyntheticControl
 
 
 def _build_experiment_data(seed: int = 101) -> pd.DataFrame:

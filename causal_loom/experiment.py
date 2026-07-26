@@ -9,8 +9,8 @@ from loguru import logger
 from scipy import stats
 from tqdm import tqdm
 
-from cib_advanced_experiments.synthetic_control import SyntheticControl
-from cib_advanced_experiments.visualization import (
+from causal_loom.synthetic_control import SyntheticControl
+from causal_loom.visualization import (
     create_experiment_aggregated_series_figure,
     create_experiment_distributions_figure,
 )

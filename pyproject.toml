@@ -3,7 +3,7 @@ requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "advanced-experiments"
+name = "causal-loom"
 version = "0.1.0"
 description = "Reusable causal-inference tools for synthetic control, difference-in-differences, and SDID"
 readme = "README.md"
@@ -49,9 +49,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zugzvangg/advanced_experiments"
-Issues = "https://github.com/zugzvangg/advanced_experiments/issues"
-Repository = "https://github.com/zugzvangg/advanced_experiments"
+Homepage = "https://github.com/zugzvangg/causal-loom"
+Issues = "https://github.com/zugzvangg/causal-loom/issues"
+Repository = "https://github.com/zugzvangg/causal-loom"
 
 [dependency-groups]
 dev = [
@@ -70,7 +70,7 @@ include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cib_advanced_experiments*"]
+include = ["causal_loom*"]
 exclude = ["notebooks*", "tests*"]
 namespaces = false
 
@@ -83,7 +83,7 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["cib_advanced_experiments"]
+source = ["causal_loom"]
 
 [tool.coverage.report]
 fail_under = 75

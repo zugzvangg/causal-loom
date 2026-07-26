@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from cib_advanced_experiments import DifferenceInDifferences
+from causal_loom import DifferenceInDifferences
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "notebooks" / "data"
 EXPECTED_DATA_HASHES = {

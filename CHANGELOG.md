@@ -9,6 +9,11 @@ breaking API changes when they are documented here.
 
 ## Unreleased
 
+### Changed
+
+- Standardized the project identity as `CausalLoom`, the distribution name as
+  `causal-loom`, and the Python import package as `causal_loom`.
+
 ## 0.1.0 - 2026-07-26
 
 ### Added

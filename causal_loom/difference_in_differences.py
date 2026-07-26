@@ -6,8 +6,8 @@ import pandas as pd
 from plotly import graph_objects as go
 from scipy import stats
 
-from cib_advanced_experiments._did_utils import safe_mean, validate_binary_column
-from cib_advanced_experiments.visualization import (
+from causal_loom._did_utils import safe_mean, validate_binary_column
+from causal_loom.visualization import (
     create_did_2x2_figure,
     create_did_parallel_trends_figure,
 )

@@ -1,8 +1,8 @@
 import pandas as pd
 import pytest
 
-from cib_advanced_experiments.matching import select_control_group_by_features
-from cib_advanced_experiments.propensity_score_matching import (
+from causal_loom.matching import select_control_group_by_features
+from causal_loom.propensity_score_matching import (
     propensity_score_match,
     select_control_group_by_propensity_from_panel,
 )

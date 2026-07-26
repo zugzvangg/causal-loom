@@ -13,10 +13,10 @@ import pandas as pd
 from plotly import graph_objects as go
 from scipy import stats
 
-from cib_advanced_experiments._did_utils import (
+from causal_loom._did_utils import (
     safe_weighted_mean as _safe_weighted_mean,
 )
-from cib_advanced_experiments._sdid_core import (
+from causal_loom._sdid_core import (
     _cluster_robust_covariance,
     _fit_time_weights_core,
     _fit_unit_weights_core,
@@ -26,13 +26,13 @@ from cib_advanced_experiments._sdid_core import (
     _SdidInferenceSummary,
     calculate_sigma_hat,
 )
-from cib_advanced_experiments._sdid_core import (
+from causal_loom._sdid_core import (
     calculate_regularization as calculate_regularization,
 )
-from cib_advanced_experiments._sdid_core import (
+from causal_loom._sdid_core import (
     calculate_time_regularization as calculate_time_regularization,
 )
-from cib_advanced_experiments.visualization import (
+from causal_loom.visualization import (
     create_did_2x2_figure,
     create_did_parallel_trends_figure,
 )

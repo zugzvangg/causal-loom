@@ -1,4 +1,4 @@
-import cib_advanced_experiments
+import causal_loom
 
 
 def test_expected_public_api_is_exported():
@@ -13,5 +13,5 @@ def test_expected_public_api_is_exported():
         "synthetic_difference_in_differences",
     }
 
-    assert expected_exports.issubset(set(cib_advanced_experiments.__all__))
-    assert all(hasattr(cib_advanced_experiments, name) for name in expected_exports)
+    assert expected_exports.issubset(set(causal_loom.__all__))
+    assert all(hasattr(causal_loom, name) for name in expected_exports)

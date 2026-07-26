@@ -2,12 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cib_advanced_experiments.preprocessing import (
+from causal_loom.preprocessing import (
     build_conformal_frame,
     build_synthetic_control_matrices,
     prepare_panel_data,
 )
-from cib_advanced_experiments.synthetic_control import SyntheticControl
+from causal_loom.synthetic_control import SyntheticControl
 
 
 def test_prepare_panel_data_builds_balanced_panel():

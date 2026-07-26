@@ -2,13 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cib_advanced_experiments.conformal_inference import (
+from causal_loom.conformal_inference import (
     conformal_confidence_interval,
     conformal_confidence_interval_from_p_values,
     conformal_p_value,
     conformal_test_statistic,
 )
-from cib_advanced_experiments.synthetic_control import SyntheticControl
+from causal_loom.synthetic_control import SyntheticControl
 
 
 def _build_panel_data(seed: int = 21) -> pd.DataFrame:

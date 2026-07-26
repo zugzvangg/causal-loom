@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cib_advanced_experiments.difference_in_differences import (
+from causal_loom.difference_in_differences import (
     DifferenceInDifferences,
     DifferenceInDifferencesResult,
     difference_in_differences,

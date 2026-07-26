@@ -13,24 +13,24 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from cib_advanced_experiments.conformal_inference import (
+from causal_loom.conformal_inference import (
     conformal_confidence_interval,
     conformal_p_value,
     conformal_p_value_grid_for_period,
     conformal_residuals,
 )
-from cib_advanced_experiments.matching import select_control_group_by_features
-from cib_advanced_experiments.model import SynthControlModel
-from cib_advanced_experiments.preprocessing import (
+from causal_loom.matching import select_control_group_by_features
+from causal_loom.model import SynthControlModel
+from causal_loom.preprocessing import (
     _validate_aggregation,
     _validate_frequency,
     build_synthetic_control_matrices,
     prepare_panel_data,
 )
-from cib_advanced_experiments.propensity_score_matching import (
+from causal_loom.propensity_score_matching import (
     select_control_group_by_propensity_from_panel,
 )
-from cib_advanced_experiments.visualization import (
+from causal_loom.visualization import (
     create_conformal_ci_band_figure,
     create_conformal_dashboard_figure,
     create_conformal_p_value_grid_figure,
