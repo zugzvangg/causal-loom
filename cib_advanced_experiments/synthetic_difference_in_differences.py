@@ -1,3 +1,10 @@
+"""High-level Synthetic Difference-in-Differences APIs.
+
+The implementation builds on the SDID presentation in Matheus Facure's
+*Causal Inference for the Brave and True* and the estimator of Arkhangelsky
+et al. (2021). See ``THIRD_PARTY_NOTICES.md`` for attribution and licensing.
+"""
+
 from dataclasses import dataclass
 from typing import Any, Union
 
@@ -10,21 +17,26 @@ from cib_advanced_experiments._did_utils import (
     safe_weighted_mean as _safe_weighted_mean,
 )
 from cib_advanced_experiments._sdid_core import (
-    _SdidCellMetrics,
-    _SdidInferenceSummary,
     _cluster_robust_covariance,
     _fit_time_weights_core,
     _fit_unit_weights_core,
     _join_sdid_weights_core,
     _prepare_sdid_panel,
-    calculate_regularization,
+    _SdidCellMetrics,
+    _SdidInferenceSummary,
     calculate_sigma_hat,
-    calculate_time_regularization,
+)
+from cib_advanced_experiments._sdid_core import (
+    calculate_regularization as calculate_regularization,
+)
+from cib_advanced_experiments._sdid_core import (
+    calculate_time_regularization as calculate_time_regularization,
 )
 from cib_advanced_experiments.visualization import (
     create_did_2x2_figure,
     create_did_parallel_trends_figure,
 )
+
 
 def residualize_outcome(
     panel: pd.DataFrame,
@@ -75,7 +87,9 @@ def residualize_outcome(
     categorical_columns = X.select_dtypes(
         include=["object", "category", "string"]
     ).columns.tolist()
-    numeric_columns = [column for column in X.columns if column not in categorical_columns]
+    numeric_columns = [
+        column for column in X.columns if column not in categorical_columns
+    ]
 
     for column in numeric_columns:
         X[column] = pd.to_numeric(X[column], errors="coerce")
@@ -90,12 +104,16 @@ def residualize_outcome(
         drop_first=True,
         dtype=float,
     )
-    constant_columns = [column for column in X.columns if X[column].nunique(dropna=False) <= 1]
+    constant_columns = [
+        column for column in X.columns if X[column].nunique(dropna=False) <= 1
+    ]
     if constant_columns:
         X = X.drop(columns=constant_columns)
 
     X.insert(0, "_intercept", 1.0)
-    fit_mask = (out[treatment_column].astype(int) == 0) | (out[post_column].astype(int) == 0)
+    fit_mask = (out[treatment_column].astype(int) == 0) | (
+        out[post_column].astype(int) == 0
+    )
     X_fit = X.loc[fit_mask].to_numpy(dtype=float)
     y_fit = out.loc[fit_mask, outcome_col].astype(float).to_numpy()
     if X_fit.shape[0] <= X_fit.shape[1]:
@@ -824,7 +842,10 @@ class SyntheticDifferenceInDifferences:
             .reset_index()
             .sort_values("time")
         )
-        if "control_mean" not in pivoted.columns or "treated_mean" not in pivoted.columns:
+        if (
+            "control_mean" not in pivoted.columns
+            or "treated_mean" not in pivoted.columns
+        ):
             raise ValueError("Trend diagnostics need both treatment groups.")
         pivoted["gap"] = pivoted["treated_mean"] - pivoted["control_mean"]
         return pivoted
@@ -1101,7 +1122,9 @@ def fit_time_weights(
             treatment_column=treatment_column,
             post_column=post_column,
         )
-        ridge_scale = 0.0 if np.isclose(sigma_hat, 0.0) else float(zeta_time_small / sigma_hat)
+        ridge_scale = (
+            0.0 if np.isclose(sigma_hat, 0.0) else float(zeta_time_small / sigma_hat)
+        )
     time_weights, _ = _fit_time_weights_core(
         panel=prepared_panel,
         outcome_column=outcome_col,
@@ -1285,10 +1308,18 @@ def fit_staggered_sdid(
     Returns:
         StaggeredSyntheticDifferenceInDifferencesResult: Cohort-level and aggregated SDID outputs.
     """
-    required_columns = [unit_column, time_column, outcome_col, treatment_column, post_column]
+    required_columns = [
+        unit_column,
+        time_column,
+        outcome_col,
+        treatment_column,
+        post_column,
+    ]
     if treatment_start_column is not None:
         required_columns.append(treatment_start_column)
-    missing_columns = [column for column in required_columns if column not in data.columns]
+    missing_columns = [
+        column for column in required_columns if column not in data.columns
+    ]
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
 
@@ -1321,7 +1352,9 @@ def fit_staggered_sdid(
     treatment_start_by_unit = pd.Series(index=all_units, dtype=object)
     treatment_start_by_unit.loc[starts.index.astype(str)] = starts.values
 
-    cohort_dates = sorted([x for x in treatment_start_by_unit.dropna().unique().tolist()])
+    cohort_dates = sorted(
+        [x for x in treatment_start_by_unit.dropna().unique().tolist()]
+    )
     if len(cohort_dates) == 0:
         raise ValueError("No treated cohorts found for staggered SDID.")
 
@@ -1337,13 +1370,12 @@ def fit_staggered_sdid(
         if not cohort_units:
             continue
 
-        never_treated_units = treatment_start_by_unit[treatment_start_by_unit.isna()].index.tolist()
-        later_treated_units = (
-            treatment_start_by_unit[
-                treatment_start_by_unit.notna() & (treatment_start_by_unit > cohort_date)
-            ]
-            .index.tolist()
-        )
+        never_treated_units = treatment_start_by_unit[
+            treatment_start_by_unit.isna()
+        ].index.tolist()
+        later_treated_units = treatment_start_by_unit[
+            treatment_start_by_unit.notna() & (treatment_start_by_unit > cohort_date)
+        ].index.tolist()
         control_units = list(never_treated_units)
         if include_not_yet_treated_as_controls:
             control_units += list(later_treated_units)
@@ -1355,7 +1387,9 @@ def fit_staggered_sdid(
 
         selected_units = sorted(list(set(cohort_units + control_units)))
         cohort_panel = panel[panel[unit_column].isin(selected_units)].copy()
-        cohort_panel["_cohort_start"] = cohort_panel[unit_column].map(treatment_start_by_unit)
+        cohort_panel["_cohort_start"] = cohort_panel[unit_column].map(
+            treatment_start_by_unit
+        )
         if include_not_yet_treated_as_controls:
             # Keep control rows only while they are not-yet-treated at this cohort date.
             mask_drop = (
@@ -1364,8 +1398,12 @@ def fit_staggered_sdid(
                 & (cohort_panel[time_column] >= cohort_panel["_cohort_start"])
             )
             cohort_panel = cohort_panel[~mask_drop].copy()
-        cohort_panel["cohort_treated"] = cohort_panel[unit_column].isin(cohort_units).astype(int)
-        cohort_panel["cohort_post"] = (cohort_panel[time_column] >= cohort_date).astype(int)
+        cohort_panel["cohort_treated"] = (
+            cohort_panel[unit_column].isin(cohort_units).astype(int)
+        )
+        cohort_panel["cohort_post"] = (cohort_panel[time_column] >= cohort_date).astype(
+            int
+        )
         cohort_panel = cohort_panel.drop(columns=["_cohort_start"])
 
         try:
@@ -1382,7 +1420,9 @@ def fit_staggered_sdid(
                 covariate_columns=covariate_cols,
                 use_fixed_effects=use_fixed_effects,
                 cluster_by_unit=cluster_by_unit,
-                cluster_column=cluster_column if cluster_column is not None else unit_column,
+                cluster_column=cluster_column
+                if cluster_column is not None
+                else unit_column,
                 optimizer_max_iter=optimizer_max_iter,
                 optimizer_tolerance=optimizer_tolerance,
             )
@@ -1414,7 +1454,9 @@ def fit_staggered_sdid(
 
     if len(rows) == 0:
         raise ValueError("No cohort-specific SDID models were fitted.")
-    cohort_results = pd.DataFrame(rows).sort_values("cohort_date").reset_index(drop=True)
+    cohort_results = (
+        pd.DataFrame(rows).sort_values("cohort_date").reset_index(drop=True)
+    )
     if weighting_column not in cohort_results.columns:
         raise ValueError(
             f"weighting_column '{weighting_column}' is not available in cohort_results."
@@ -1423,7 +1465,9 @@ def fit_staggered_sdid(
     if np.isclose(float(weights.sum()), 0.0):
         weights = np.ones_like(weights, dtype=float)
 
-    aggregate_estimate = float(np.average(cohort_results["estimate"].astype(float), weights=weights))
+    aggregate_estimate = float(
+        np.average(cohort_results["estimate"].astype(float), weights=weights)
+    )
     return StaggeredSyntheticDifferenceInDifferencesResult(
         aggregate_estimate=aggregate_estimate,
         cohort_results=cohort_results,

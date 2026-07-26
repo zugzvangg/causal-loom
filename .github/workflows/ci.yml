@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_NO_PROGRESS: "true"
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync the development environment
+        run: uv sync --locked --group dev
+
+      - name: Run Ruff
+        run: uv run --locked ruff check cib_advanced_experiments tests
+
+      - name: Check formatting
+        run: uv run --locked ruff format --check cib_advanced_experiments tests
+
+  tests:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync the development environment
+        run: uv sync --locked --group dev
+
+      - name: Run the test suite
+        run: >-
+          uv run --locked pytest -q
+          --cov=cib_advanced_experiments
+          --cov-report=term-missing
+
+  notebooks:
+    name: Execute notebooks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync notebook dependencies
+        run: uv sync --locked --group notebooks
+
+      - name: Execute every demonstration notebook
+        env:
+          EXECUTED_NOTEBOOK_DIR: ${{ runner.temp }}/executed-notebooks
+        run: |
+          mkdir -p "$EXECUTED_NOTEBOOK_DIR"
+          uv run --locked jupyter nbconvert \
+            --to notebook \
+            --execute \
+            --ExecutePreprocessor.timeout=600 \
+            --output-dir "$EXECUTED_NOTEBOOK_DIR" \
+            notebooks/billboard_did_library_demo.ipynb \
+            notebooks/smoking_library_demo.ipynb \
+            notebooks/synthetic_did_library_demo.ipynb
+
+  package:
+    name: Build and smoke-test package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync runtime dependencies
+        run: uv sync --locked --no-dev
+
+      - name: Build source and wheel distributions
+        run: uv build --python 3.13 --clear
+
+      - name: Smoke-test the wheel
+        working-directory: ${{ runner.temp }}
+        run: >-
+          uv run --isolated --no-project
+          --with ${{ github.workspace }}/dist/*.whl
+          python -c "import cib_advanced_experiments as package; print(package.__name__)"
+
+      - name: Smoke-test the source distribution
+        working-directory: ${{ runner.temp }}
+        run: >-
+          uv run --isolated --no-project
+          --with ${{ github.workspace }}/dist/*.tar.gz
+          python -c "import cib_advanced_experiments as package; print(package.__name__)"

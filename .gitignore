@@ -3,6 +3,11 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Local operating-system and editor metadata
+.DS_Store
+.idea/
+.vscode/
+
 # C extensions
 *.so
 

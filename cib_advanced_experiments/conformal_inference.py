@@ -1,3 +1,10 @@
+"""Conformal inference utilities for synthetic-control counterfactuals.
+
+Portions of this module adapt the workflow demonstrated in Matheus Facure's
+*Causal Inference for the Brave and True*. See ``THIRD_PARTY_NOTICES.md`` for
+attribution and licensing details.
+"""
+
 import datetime
 from typing import Iterable, Union
 
@@ -277,7 +284,9 @@ def conformal_p_value_grid_for_period(
     data = panel_data.copy()
     data[date_column] = pd.to_datetime(data[date_column])
 
-    aug_data = data[(data[date_column] < intervention_start) | (data[date_column] == period)]
+    aug_data = data[
+        (data[date_column] < intervention_start) | (data[date_column] == period)
+    ]
     p_values = {}
     for null_value in nulls:
         p_values[float(null_value)] = conformal_p_value(
@@ -365,7 +374,9 @@ def conformal_confidence_interval(
     data = panel_data.copy()
     data[date_column] = pd.to_datetime(data[date_column])
     intervention_start = pd.to_datetime(intervention_start)
-    post_dates = sorted(data.loc[data[date_column] >= intervention_start, date_column].unique())
+    post_dates = sorted(
+        data.loc[data[date_column] >= intervention_start, date_column].unique()
+    )
     periods = post_dates[:window]
     if len(periods) < window:
         raise ValueError(

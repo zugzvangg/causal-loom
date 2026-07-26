@@ -1,3 +1,10 @@
+"""Plotly figure builders for causal-estimation diagnostics.
+
+Some conformal-inference visual workflows were inspired by Matheus Facure's
+*Causal Inference for the Brave and True*. See ``THIRD_PARTY_NOTICES.md`` for
+attribution and licensing details.
+"""
+
 import numpy as np
 import pandas as pd
 import plotly.express as px

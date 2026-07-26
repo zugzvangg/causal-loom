@@ -155,12 +155,18 @@ class Experiment:
     def __validate_input_dataframe(self) -> None:
         """Validate source dataframe schema used by Experiment."""
         if self.unit_column not in self.data.columns.values:
-            raise ValueError(f"No {self.unit_column} in data axis={self.data.columns.values}")
+            raise ValueError(
+                f"No {self.unit_column} in data axis={self.data.columns.values}"
+            )
         if self.date_column not in self.data.columns.values:
-            raise ValueError(f"No {self.date_column} in data axis={self.data.columns.values}")
+            raise ValueError(
+                f"No {self.date_column} in data axis={self.data.columns.values}"
+            )
         if not self.features:
             raise ValueError("features should be a non-empty list of column names.")
-        missing_features = [f for f in self.features if f not in self.data.columns.values]
+        missing_features = [
+            f for f in self.features if f not in self.data.columns.values
+        ]
         if missing_features:
             raise ValueError(
                 f"Features not found in data: {missing_features}. "
@@ -270,7 +276,9 @@ class Experiment:
             treated_unit = str(row[self.unit_column])
             treatment_date = pd.to_datetime(row[self.treatment_date_column])
             if treated_unit not in known_units:
-                logger.info(f"{treated_unit} not in history DataFrame. Skip fitting it.")
+                logger.info(
+                    f"{treated_unit} not in history DataFrame. Skip fitting it."
+                )
                 continue
 
             try:
@@ -431,7 +439,9 @@ class Experiment:
         self,
         fitted_units: List[FittedSyntheticControlResult],
         feature: str,
-        effect_evaluation_aggregation: Literal["last_date", "mean_value"] = "mean_value",
+        effect_evaluation_aggregation: Literal[
+            "last_date", "mean_value"
+        ] = "mean_value",
         quantile_error_border: float = 0.95,
         min_units_after_filter: int = 1,
         min_units_for_inference: int = 1,
@@ -481,7 +491,9 @@ class Experiment:
         rows = []
         fit_errors = [f.fit_error for f in fitted_units]
         border_quantile = (
-            float(np.quantile(fit_errors, quantile_error_border)) if fit_errors else np.nan
+            float(np.quantile(fit_errors, quantile_error_border))
+            if fit_errors
+            else np.nan
         )
 
         for fitted in fitted_units:

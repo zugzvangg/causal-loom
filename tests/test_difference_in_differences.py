@@ -80,7 +80,9 @@ def test_difference_in_differences_raises_when_cell_is_empty():
         treatment_column="treated",
         post_column="post",
     )
-    with pytest.raises(ValueError, match="Each DiD cell should have at least one observation"):
+    with pytest.raises(
+        ValueError, match="Each DiD cell should have at least one observation"
+    ):
         did.fit()
 
 

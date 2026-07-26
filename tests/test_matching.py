@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -12,7 +11,13 @@ from cib_advanced_experiments.propensity_score_matching import (
 def test_select_control_group_by_features_returns_closest_controls():
     dates = pd.date_range("2024-01-01", periods=4, freq="D")
     rows = []
-    for unit_id, base in [("u0", 10.0), ("u1", 10.1), ("u2", 9.8), ("u3", 15.0), ("u4", 10.3)]:
+    for unit_id, base in [
+        ("u0", 10.0),
+        ("u1", 10.1),
+        ("u2", 9.8),
+        ("u3", 15.0),
+        ("u4", 10.3),
+    ]:
         for date in dates:
             rows.append(
                 {
@@ -189,7 +194,9 @@ def test_select_control_group_by_propensity_from_panel_raises_on_bad_panel_input
             "segment": ["A", "A", "B", "A", "A", "B"],
         }
     )
-    with pytest.raises(ValueError, match="Propensity covariate 'segment' should be numeric"):
+    with pytest.raises(
+        ValueError, match="Propensity covariate 'segment' should be numeric"
+    ):
         select_control_group_by_propensity_from_panel(
             data=panel,
             unit_column="unit",

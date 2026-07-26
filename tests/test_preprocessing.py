@@ -91,8 +91,8 @@ def test_synthetic_control_accepts_unbalanced_source_data():
         control_group=[f"u{i}" for i in range(1, 11)],
         min_date="2024-01-01",
         max_date="2024-01-08",
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     sc.fit()
     weights = sc.get_weights()

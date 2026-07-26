@@ -39,8 +39,8 @@ def test_conformal_residuals_and_p_value_api():
         treated_unit="u0",
         treatment_date="2024-01-09",
         control_group=[f"u{i}" for i in range(1, 11)],
-        epochs=10,
-        lr=0.05,
+        max_iter=100,
+        tolerance=1e-8,
     )
 
     residuals = sc.get_conformal_residuals(feature="y", null_hypothesis=0.0, window=2)
@@ -63,8 +63,8 @@ def test_conformal_grid_and_confidence_interval_api():
         treated_unit="u0",
         treatment_date="2024-01-09",
         control_group=[f"u{i}" for i in range(1, 11)],
-        epochs=8,
-        lr=0.05,
+        max_iter=100,
+        tolerance=1e-8,
     )
 
     nulls = np.linspace(-0.5, 0.5, 11)
@@ -90,7 +90,9 @@ def test_conformal_grid_and_confidence_interval_api():
 
 def test_conformal_p_value_raises_on_bad_null_vector_length():
     data = _build_panel_data(seed=23)
-    with pytest.raises(ValueError, match="Null hypothesis trajectory length should be 2"):
+    with pytest.raises(
+        ValueError, match="Null hypothesis trajectory length should be 2"
+    ):
         conformal_p_value(
             panel_data=data,
             unit_column="unit",
@@ -99,7 +101,7 @@ def test_conformal_p_value_raises_on_bad_null_vector_length():
             treated_unit="u0",
             intervention_start="2024-01-11",
             null_hypothesis=[0.1, 0.2, 0.3],
-            model_kwargs={"epochs": 5, "lr": 0.05},
+            model_kwargs={"max_iter": 100, "tolerance": 1e-8},
             window=2,
             q=1,
         )
@@ -118,7 +120,9 @@ def test_conformal_statistic_and_alpha_validation_errors():
 
 def test_conformal_confidence_interval_raises_on_too_large_window():
     data = _build_panel_data(seed=24)
-    with pytest.raises(ValueError, match="only 1 post-intervention periods are available"):
+    with pytest.raises(
+        ValueError, match="only 1 post-intervention periods are available"
+    ):
         conformal_confidence_interval(
             panel_data=data,
             unit_column="unit",
@@ -128,7 +132,7 @@ def test_conformal_confidence_interval_raises_on_too_large_window():
             intervention_start="2024-01-12",
             window=2,
             nulls=np.linspace(-0.5, 0.5, 5),
-            model_kwargs={"epochs": 5, "lr": 0.05},
+            model_kwargs={"max_iter": 100, "tolerance": 1e-8},
             alpha=0.1,
             q=1,
         )

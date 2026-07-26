@@ -52,7 +52,9 @@ def _build_sdid_data(seed: int = 301, true_effect: float = 1.8) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _build_staggered_sdid_data(seed: int = 401, true_effect: float = 2.0) -> pd.DataFrame:
+def _build_staggered_sdid_data(
+    seed: int = 401, true_effect: float = 2.0
+) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     periods = pd.date_range("2024-01-01", periods=12, freq="D")
     never_treated_units = [f"c{i}" for i in range(8)]

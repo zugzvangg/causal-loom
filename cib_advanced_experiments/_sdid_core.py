@@ -1,4 +1,9 @@
-"""Core computational helpers for Synthetic Difference-in-Differences."""
+"""Core computational helpers for Synthetic Difference-in-Differences.
+
+The implementation builds on the SDID presentation in Matheus Facure's
+*Causal Inference for the Brave and True* and the estimator of Arkhangelsky
+et al. (2021). See ``THIRD_PARTY_NOTICES.md`` for attribution and licensing.
+"""
 
 from dataclasses import dataclass
 
@@ -86,7 +91,9 @@ def _prepare_sdid_panel(
         treatment_column,
         post_column,
     ]
-    missing_columns = [column for column in required_columns if column not in data.columns]
+    missing_columns = [
+        column for column in required_columns if column not in data.columns
+    ]
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
 
@@ -160,8 +167,8 @@ def _build_synth_control_initial_weights(
         warm_start_model = SynthControlModel(
             seed=42,
             loss_func="mse",
-            epochs=max(500, int(max_iter)),
-            lr=max(1e-12, float(tolerance)),
+            max_iter=max(500, int(max_iter)),
+            tolerance=max(1e-12, float(tolerance)),
         )
         warm_start_model.fit(X=centered_X, y=centered_y)
         candidate_weights = np.asarray(warm_start_model.get_weights(), dtype=float)
@@ -287,9 +294,9 @@ def _calculate_first_difference_std(
     Returns:
         float: Standard deviation of first differences with epsilon fallback.
     """
-    control_pre = data[(data[treatment_column] == 0) & (data[post_column] == 0)].sort_values(
-        [unit_column, time_column]
-    )
+    control_pre = data[
+        (data[treatment_column] == 0) & (data[post_column] == 0)
+    ].sort_values([unit_column, time_column])
     first_diff_std = (
         control_pre.groupby(unit_column)[outcome_column].diff().astype(float).std()
     )
@@ -470,11 +477,15 @@ def _fit_unit_weights_core(
 
     if y_pre_control.isna().sum().sum() > 0:
         y_pre_control = y_pre_control.apply(
-            lambda series: series.fillna(series.mean() if pd.notna(series.mean()) else 0.0)
+            lambda series: series.fillna(
+                series.mean() if pd.notna(series.mean()) else 0.0
+            )
         )
 
     y_pre_treated_mean = (
-        treated_pre.groupby(time_column)[outcome_column].mean().reindex(y_pre_control.index)
+        treated_pre.groupby(time_column)[outcome_column]
+        .mean()
+        .reindex(y_pre_control.index)
     )
     if y_pre_treated_mean.isna().sum() > 0:
         mean_value = y_pre_treated_mean.mean()
@@ -551,7 +562,9 @@ def _fit_time_weights_core(
         .sort_index(axis=0)
         .sort_index(axis=1)
     )
-    y_post_mean = control_post.groupby(unit_column)[outcome_column].mean().reindex(y_pre.columns)
+    y_post_mean = (
+        control_post.groupby(unit_column)[outcome_column].mean().reindex(y_pre.columns)
+    )
 
     valid_columns = y_post_mean[y_post_mean.notna()].index
     y_pre = y_pre.loc[:, valid_columns]
@@ -562,7 +575,9 @@ def _fit_time_weights_core(
 
     if y_pre.isna().sum().sum() > 0:
         y_pre = y_pre.apply(
-            lambda series: series.fillna(series.mean() if pd.notna(series.mean()) else 0.0)
+            lambda series: series.fillna(
+                series.mean() if pd.notna(series.mean()) else 0.0
+            )
         )
 
     if not np.isfinite(y_pre.to_numpy()).all():
@@ -621,7 +636,9 @@ def _join_sdid_weights_core(
     n_treated_units = int(
         weighted.loc[weighted[treatment_column] == 1, unit_column].nunique()
     )
-    n_post_periods = int(weighted.loc[weighted[post_column] == 1, time_column].nunique())
+    n_post_periods = int(
+        weighted.loc[weighted[post_column] == 1, time_column].nunique()
+    )
     if n_treated_units == 0:
         raise ValueError("No treated units available to fill treated weights.")
     if n_post_periods == 0:
@@ -682,7 +699,9 @@ def _cluster_robust_covariance(
         and weights.shape[0] == n_obs
         and clusters.shape[0] == n_obs
     ):
-        raise ValueError("X, residuals, weights and clusters should have same row count.")
+        raise ValueError(
+            "X, residuals, weights and clusters should have same row count."
+        )
 
     xtwx = X.T @ (X * weights[:, None])
     bread = np.linalg.pinv(xtwx)

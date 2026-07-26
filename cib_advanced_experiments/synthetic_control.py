@@ -1,11 +1,16 @@
+"""High-level synthetic-control estimator and placebo inference.
+
+The estimator was inspired by the synthetic-control chapters in Matheus
+Facure's *Causal Inference for the Brave and True*. See
+``THIRD_PARTY_NOTICES.md`` for attribution and licensing details.
+"""
+
 import datetime
-import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Union
 
 import numpy as np
 import pandas as pd
-from matplotlib import style
 from tqdm import tqdm
 
 from cib_advanced_experiments.conformal_inference import (
@@ -38,13 +43,6 @@ from cib_advanced_experiments.visualization import (
     create_synthetic_control_weights_figure,
 )
 
-warnings.filterwarnings(action="ignore", category=DeprecationWarning)
-warnings.simplefilter(action="ignore", category=FutureWarning)
-warnings.simplefilter(action="ignore", category=UserWarning)
-warnings.simplefilter(action="ignore", category=RuntimeWarning)
-
-style.use("fivethirtyeight")
-
 
 @dataclass(frozen=True)
 class PlaceboResult:
@@ -72,68 +70,33 @@ class PlaceboResult:
 
 
 class SyntheticControl:
-    """Module for processing synthetic control.
-    Realization is inspired by: https://matheusfacure.github.io/python-causality-handbook/15-Synthetic-Control.html
+    """Estimate a treated unit's counterfactual from a weighted donor pool.
 
     Args:
-        data (pd.DataFrame): Dataframe on which the stynthetic control will be processed.
-            Should have the the following column structure: unit_column, date_column, feat_0, feat_1,..., feat_n.
-            Each row in dataset represents one observation.
+        data: Long-form panel or event dataframe.
+        unit_column: Column identifying observational units.
+        date_column: Column containing observation dates.
+        features: Numeric outcomes used for fitting and evaluation.
+        treated_unit: Identifier of the treated unit.
+        treatment_date: First treated period.
+        control_group: Explicit donor identifiers. If omitted, matching is used.
+        min_date: Optional inclusive lower date bound.
+        max_date: Optional inclusive upper date bound.
+        number_of_units_for_matching: Number of controls selected automatically.
+        categorical_matching: Exact-match columns for feature matching.
+        numeric_matching: Numeric columns for distance-based matching.
+        matching_method: ``"feature"`` or ``"propensity"``.
+        propensity_covariates: Covariates for propensity-score matching.
+        propensity_caliper: Maximum propensity-score distance.
+        propensity_random_state: Random seed for the propensity model.
+        date_frequency: Aggregation frequency: daily, weekly, monthly, or yearly.
+        aggregation_statistic: Aggregation applied within unit-period cells.
+        **kwargs: Parameters forwarded to :class:`SynthControlModel`, including
+            ``seed``, ``loss_func``, ``max_iter``, and ``tolerance``.
 
-        unit_column (str): Column from 'data' which divides units(cnum, cocunut, etc.).
-
-        date_column (str): Column from 'data' with the date of event rows(trade_date, deal_date, etc.).
-
-        features (str): Columns from 'data' with the numeric features we want to use for fitting
-            and check the effect on(pnl, amount, etc.).
-
-        treated_unit (Union[str, int]): Unit from the value of date[unit_column], which was treated and we want to
-            see the effect on.
-
-        treatment_date (Union[str, datetime.datetime], optional): Date of test unit been treated. Should be in the range of 'date_column' values
-            or between 'min_date' and 'max_date'.
-
-        control_group (List[Union[str, int]], optional): Group of ids from date[unit_column] which to be taken for control group.
-            If None, the automactic matching would be done.
-
-        matching_method (Literal["feature", "propensity"], optional): How to build control group when
-            control_group is not passed. Defaults to "feature" for backward compatibility.
-
-        propensity_covariates (List[str], optional): Numeric columns used when matching_method="propensity".
-
-        propensity_caliper (float, optional): Maximum propensity-score distance for eligible controls.
-
-        propensity_random_state (int, optional): Random state for propensity model.
-
-        min_date (Union[str, datetime.datetime], optional): Minimal date of column 'date_column' of dataset 'data'
-            to take for synthetic control, including. Defaults to None. If None, the minimal date from 'date' will be taken.
-
-        max_date (Union[str, datetime.datetime], optional): Maximal date of column 'date_column' of dataset 'data'
-            to take for synthetic control, including. Defaults to None. If None, the maximal date from 'date' will be taken.
-
-        date_frequency (Literal["D", "W", "M", "YE"], optional): Data frequency aggregation based on time.
-
-        Possible: "D": daily, "W": weekly, "M": monthly, "YE": yearly. Defaults to "D".
-
-        aggregation_statistics (Literal["sum", "mean", "max", "min"], optional): Statistics of arggregation.
-            For example, if we work with fx deals, and want to have data on mean deal_turnover per week, we set:
-            date_frequency = "W", aggregation_statistics = "mean". Defaults to "mean".
-
-        **seed (int): Random seed for model.
-        **loss_func(Literal["mse", "mae"]): Optimize function for model.
-        **epochs (int): Number of epochs for studying of the model.
-        **lr (float): Learning rate of the model.
-
-    Extra methods:
-        get_conformal_residuals(...): residuals under null hypothesis for conformal inference.
-        get_conformal_p_value(...): permutation conformal p-value for a null effect.
-        get_conformal_p_value_grid_for_period(...): p-value grid by null effects for one period.
-        get_conformal_confidence_interval(...): conformal confidence intervals for post-treatment periods.
-        plot_conformal_residuals(...), plot_conformal_p_value_grid_for_period(...),
-        plot_conformal_confidence_interval(...): ready-to-use conformal visualizations.
-
-    Returns:
-        None
+    Notes:
+        Causal interpretation depends on a credible donor pool, no treated-unit
+        interference, and a sufficiently good pre-treatment fit.
     """
 
     def __init__(
@@ -185,7 +148,7 @@ class SyntheticControl:
             None
         """
         self.data = data.copy()
-        # emperical + dont't touch it + don't care
+        # A minimum donor pool reduces accidental overfitting in auto-matching mode.
         self.MINIMAL_CONTROL_GROUP_SIZE = 10
         self.__validate_data(
             unit_column=unit_column, date_column=date_column, features=features
@@ -225,10 +188,12 @@ class SyntheticControl:
         Returns:
             None
         """
-        for column in [unit_column, date_column] + features:
-            assert (
-                column in self.data.columns.values
-            ), f"Column {column} not in data axis"
+        required_columns = [unit_column, date_column] + features
+        missing_columns = [
+            column for column in required_columns if column not in self.data.columns
+        ]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}.")
         self.unit_column = unit_column
         # lets have ids as strings
         self.data[self.unit_column] = self.data[self.unit_column].astype(str)
@@ -248,9 +213,11 @@ class SyntheticControl:
         Returns:
             None
         """
-        assert (
-            str(treated_unit) in self.data[self.unit_column].values
-        ), f"Unit {treated_unit} not in {self.unit_column} axis"
+        if str(treated_unit) not in self.data[self.unit_column].values:
+            raise ValueError(
+                f"Treated unit {treated_unit!r} is not present in "
+                f"column {self.unit_column!r}."
+            )
         self.treated_unit = str(treated_unit)
 
     def __set_control_group(
@@ -283,13 +250,17 @@ class SyntheticControl:
             )
         if not control_group:
             # if control group is not set, make matching
-            assert (
-                number_of_units_for_matching
-            ), "Set 'number_of_units_for_matching' variable to some integer value, if you do not want to use matching set the 'control_group' directly."
+            if number_of_units_for_matching is None:
+                raise ValueError(
+                    "Set 'number_of_units_for_matching' when 'control_group' "
+                    "is not provided."
+                )
             if matching_method == "feature":
-                assert (
-                    categorical_matching or numeric_matching
-                ), "Set either 'categorical_matching' or 'numeric_matching' for feature matching."
+                if not (categorical_matching or numeric_matching):
+                    raise ValueError(
+                        "Set either 'categorical_matching' or 'numeric_matching' "
+                        "for feature matching."
+                    )
                 matching_result = select_control_group_by_features(
                     data=self.data,
                     unit_column=self.unit_column,
@@ -320,15 +291,28 @@ class SyntheticControl:
             self.control_group_via_matching = True
         else:
             self.control_group_via_matching = False
-        assert (
-            len(control_group) >= self.MINIMAL_CONTROL_GROUP_SIZE
-        ), f"To small 'control_group'. Make it at least {self.MINIMAL_CONTROL_GROUP_SIZE} units."
-        # otherwise the given control group is taken directly
-        # Given ids may be of not same type as ids in unit_column.
-        # Convert to strings too for consistency.
-        control_group = list(map(str, control_group))
-        # if treated in control group, drop it
-        control_group = [x for x in control_group if x != self.treated_unit]
+        # Normalize identifiers, remove duplicates while preserving order, and
+        # never allow the treated unit into its own donor pool.
+        control_group = list(
+            dict.fromkeys(
+                str(unit) for unit in control_group if str(unit) != self.treated_unit
+            )
+        )
+        available_units = set(self.data[self.unit_column].astype(str))
+        missing_controls = [
+            unit for unit in control_group if unit not in available_units
+        ]
+        if missing_controls:
+            raise ValueError(
+                f"Control units are not present in {self.unit_column!r}: "
+                f"{missing_controls}."
+            )
+        if len(control_group) < self.MINIMAL_CONTROL_GROUP_SIZE:
+            raise ValueError(
+                "Control group is too small after validation: need at least "
+                f"{self.MINIMAL_CONTROL_GROUP_SIZE} distinct control units, "
+                f"got {len(control_group)}."
+            )
         self.data = self.data[
             self.data[self.unit_column].isin(control_group + [self.treated_unit])
         ].copy()
@@ -359,9 +343,12 @@ class SyntheticControl:
             max_date if max_date else self.data[self.date_column].dt.date.max()
         )
         treatment_date = pd.to_datetime(treatment_date)
-        assert (treatment_date > self.min_date) and (
-            treatment_date < self.max_date
-        ), f"treatment_date should be between min_date and max_date. {treatment_date=}, {self.min_date=}, {self.max_date=}"
+        if not self.min_date < treatment_date < self.max_date:
+            raise ValueError(
+                "treatment_date should be strictly between min_date and max_date; "
+                f"got treatment_date={treatment_date}, min_date={self.min_date}, "
+                f"max_date={self.max_date}."
+            )
         self.treatment_date = treatment_date
 
     def __prepare_panel_and_matrices(self) -> None:
@@ -488,6 +475,8 @@ class SyntheticControl:
         Returns:
             np.ndarray: Array of weights.
         """
+        if self.__weights is None:
+            raise ValueError("Fit model first with .fit()")
         return self.__weights
 
     def get_data_on_features(self, feature: str) -> pd.DataFrame:
@@ -500,8 +489,10 @@ class SyntheticControl:
         Returns:
             pd.DataFrame: DataFrame with real and synthetic data for the feature.
         """
-        assert feature in self.features, f"Select feature from {self.features}"
-        assert self.__weights is not None, "Fit model first with .fit()"
+        if feature not in self.features:
+            raise ValueError(f"Select feature from {self.features}")
+        if self.__weights is None:
+            raise ValueError("Fit model first with .fit()")
         # put all values in atributed to be able to get them
         real = self.data.query("is_treated")[feature].to_list()
         synth = (
@@ -598,7 +589,8 @@ class SyntheticControl:
         Returns:
             pd.DataFrame: Long dataframe with treated_unit/date/real/synthetic/effect.
         """
-        assert feature in self.features, f"Select feature from {self.features}"
+        if feature not in self.features:
+            raise ValueError(f"Select feature from {self.features}")
         all_units = sorted(self.data[self.unit_column].astype(str).unique().tolist())
         if len(all_units) <= self.MINIMAL_CONTROL_GROUP_SIZE:
             raise ValueError(
@@ -884,7 +876,8 @@ class SyntheticControl:
         Returns:
             pd.DataFrame: Residual dataframe for conformal inference.
         """
-        assert feature in self.features, f"Select feature from {self.features}"
+        if feature not in self.features:
+            raise ValueError(f"Select feature from {self.features}")
         return conformal_residuals(
             panel_data=self.data,
             unit_column=self.unit_column,
@@ -917,7 +910,8 @@ class SyntheticControl:
         Returns:
             float: Conformal p-value.
         """
-        assert feature in self.features, f"Select feature from {self.features}"
+        if feature not in self.features:
+            raise ValueError(f"Select feature from {self.features}")
         return conformal_p_value(
             panel_data=self.data,
             unit_column=self.unit_column,
@@ -951,7 +945,8 @@ class SyntheticControl:
         Returns:
             pd.DataFrame: P-value grid indexed by null effects.
         """
-        assert feature in self.features, f"Select feature from {self.features}"
+        if feature not in self.features:
+            raise ValueError(f"Select feature from {self.features}")
         return conformal_p_value_grid_for_period(
             panel_data=self.data,
             unit_column=self.unit_column,
@@ -987,7 +982,8 @@ class SyntheticControl:
         Returns:
             pd.DataFrame: Confidence interval bounds by period.
         """
-        assert feature in self.features, f"Select feature from {self.features}"
+        if feature not in self.features:
+            raise ValueError(f"Select feature from {self.features}")
         return conformal_confidence_interval(
             panel_data=self.data,
             unit_column=self.unit_column,

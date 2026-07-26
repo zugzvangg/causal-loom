@@ -54,8 +54,8 @@ def test_experiment_run_and_metrics_success():
         feature="y",
         to_plot=False,
         control_group=control_group,
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
         inference_method="independent_ttest",
     )
 
@@ -89,8 +89,8 @@ def test_experiment_fit_all_and_evaluate_split_api():
         feature="y",
         to_plot=False,
         control_group=control_group,
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     assert len(fitted) == 2
 
@@ -124,8 +124,8 @@ def test_experiment_get_aggregated_series_after_fit_all():
         feature="y",
         to_plot=False,
         control_group=control_group,
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     aggregated = experiment.get_aggregated_series(feature="y", fitted_units=fitted)
 
@@ -133,10 +133,7 @@ def test_experiment_get_aggregated_series_after_fit_all():
     assert len(aggregated) > 0
 
     expected_last_real = np.mean(
-        [
-            f.synthetic_control.get_data_on_features("y").iloc[-1]["real"]
-            for f in fitted
-        ]
+        [f.synthetic_control.get_data_on_features("y").iloc[-1]["real"] for f in fitted]
     )
     assert np.isclose(aggregated.iloc[-1]["real"], expected_last_real)
 
@@ -158,8 +155,8 @@ def test_experiment_supports_permutation_inference():
         feature="y",
         to_plot=False,
         control_group=control_group,
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
         inference_method="permutation",
         permutation_iterations=200,
         random_state=7,
@@ -186,8 +183,8 @@ def test_experiment_feature_and_propensity_matching_paths():
         number_of_units_for_matching=10,
         matching_method="feature",
         numeric_matching=["retprice", "age15to24"],
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     assert isinstance(feature_res, ExperimentResult)
 
@@ -197,8 +194,8 @@ def test_experiment_feature_and_propensity_matching_paths():
         number_of_units_for_matching=10,
         matching_method="propensity",
         propensity_covariates=["retprice", "age15to24"],
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     assert isinstance(propensity_res, ExperimentResult)
 
@@ -242,8 +239,8 @@ def test_experiment_raises_when_no_synthetic_controls_fitted():
             feature="y",
             to_plot=False,
             control_group=[f"u{i}" for i in range(1, 11)],
-            epochs=5,
-            lr=0.01,
+            max_iter=100,
+            tolerance=1e-8,
         )
 
 
@@ -267,8 +264,8 @@ def test_experiment_quantile_fallback_keeps_min_units():
         min_units_after_filter=1,
         min_units_for_inference=1,
         control_group=control_group,
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     assert len(result.filtered_frame) == 1
 
@@ -294,8 +291,8 @@ def test_experiment_raises_when_min_units_for_inference_not_met():
             min_units_after_filter=1,
             min_units_for_inference=2,
             control_group=control_group,
-            epochs=5,
-            lr=0.01,
+            max_iter=100,
+            tolerance=1e-8,
         )
 
 
@@ -326,8 +323,8 @@ def test_experiment_can_continue_on_fit_error(monkeypatch):
         to_plot=False,
         continue_on_fit_error=True,
         control_group=control_group,
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
 
     assert len(fitted) == 1

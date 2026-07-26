@@ -2,14 +2,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cib_advanced_experiments.matching import select_control_group_by_features
-from cib_advanced_experiments.propensity_score_matching import propensity_score_match
-from cib_advanced_experiments.synthetic_control import SyntheticControl
-
-
-import numpy as np
-import pandas as pd
-
 from cib_advanced_experiments.synthetic_control import SyntheticControl
 
 
@@ -44,8 +36,8 @@ def test_synthetic_control_uses_external_feature_matching():
         number_of_units_for_matching=10,
         categorical_matching=["segment"],
         numeric_matching=["pre_metric"],
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     sc.fit()
 
@@ -80,8 +72,8 @@ def test_synthetic_control_defaults_to_feature_matching():
         treatment_date="2024-01-06",
         number_of_units_for_matching=10,
         numeric_matching=["pre_metric"],
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     sc.fit()
     assert sc.get_weights().shape == (10,)
@@ -117,8 +109,8 @@ def test_synthetic_control_can_switch_to_propensity_matching():
         number_of_units_for_matching=10,
         matching_method="propensity",
         propensity_covariates=["income", "age"],
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     sc.fit()
 
@@ -151,8 +143,8 @@ def test_synthetic_control_get_effect_data_contains_effect_column():
         treated_unit="u0",
         treatment_date="2024-01-06",
         control_group=[f"u{i}" for i in range(1, 11)],
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     sc.fit()
     effect_data = sc.get_effect_data("y")
@@ -187,8 +179,8 @@ def test_synthetic_control_raises_for_conflicting_control_group_settings():
             control_group=[f"u{i}" for i in range(1, 11)],
             number_of_units_for_matching=10,
             numeric_matching=["y"],
-            epochs=5,
-            lr=0.01,
+            max_iter=100,
+            tolerance=1e-8,
         )
 
 
@@ -210,10 +202,10 @@ def test_synthetic_control_requires_fit_before_series_access():
         treated_unit="u0",
         treatment_date="2024-01-06",
         control_group=[f"u{i}" for i in range(1, 11)],
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
-    with pytest.raises(AssertionError, match="Fit model first with .fit"):
+    with pytest.raises(ValueError, match="Fit model first with .fit"):
         sc.get_data_on_features("y")
 
 
@@ -227,7 +219,7 @@ def test_synthetic_control_raises_on_too_small_control_group():
             rows.append({"unit": unit, "date": date, "y": 1.0 + idx + rng.normal()})
     data = pd.DataFrame(rows)
 
-    with pytest.raises(AssertionError, match="To small 'control_group'"):
+    with pytest.raises(ValueError, match="Control group is too small"):
         SyntheticControl(
             data=data,
             unit_column="unit",
@@ -236,8 +228,8 @@ def test_synthetic_control_raises_on_too_small_control_group():
             treated_unit="u0",
             treatment_date="2024-01-06",
             control_group=[f"u{i}" for i in range(1, 6)],
-            epochs=5,
-            lr=0.01,
+            max_iter=100,
+            tolerance=1e-8,
         )
 
 
@@ -265,8 +257,8 @@ def test_synthetic_control_placebo_result_api():
         treated_unit="u0",
         treatment_date="2024-01-06",
         control_group=[f"u{i}" for i in range(1, 11)],
-        epochs=5,
-        lr=0.01,
+        max_iter=100,
+        tolerance=1e-8,
     )
     sc.fit()
 

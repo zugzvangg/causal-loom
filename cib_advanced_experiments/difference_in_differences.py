@@ -118,22 +118,26 @@ class DifferenceInDifferences:
 
         treated_pre = safe_mean(
             self.data,
-            (self.data[self.treatment_column] == 1) & (self.data[self.post_column] == 0),
+            (self.data[self.treatment_column] == 1)
+            & (self.data[self.post_column] == 0),
             self.outcome_column,
         )
         treated_post = safe_mean(
             self.data,
-            (self.data[self.treatment_column] == 1) & (self.data[self.post_column] == 1),
+            (self.data[self.treatment_column] == 1)
+            & (self.data[self.post_column] == 1),
             self.outcome_column,
         )
         control_pre = safe_mean(
             self.data,
-            (self.data[self.treatment_column] == 0) & (self.data[self.post_column] == 0),
+            (self.data[self.treatment_column] == 0)
+            & (self.data[self.post_column] == 0),
             self.outcome_column,
         )
         control_post = safe_mean(
             self.data,
-            (self.data[self.treatment_column] == 0) & (self.data[self.post_column] == 1),
+            (self.data[self.treatment_column] == 0)
+            & (self.data[self.post_column] == 1),
             self.outcome_column,
         )
 
@@ -159,7 +163,9 @@ class DifferenceInDifferences:
         else:
             t_stat = float(estimate / std_error)
             pvalue = float(2 * (1 - stats.t.cdf(abs(t_stat), df=n_obs - n_params)))
-            ci_delta = float(stats.t.ppf(1 - alpha / 2, df=n_obs - n_params) * std_error)
+            ci_delta = float(
+                stats.t.ppf(1 - alpha / 2, df=n_obs - n_params) * std_error
+            )
 
         group_means = pd.DataFrame(
             {
@@ -249,13 +255,22 @@ class DifferenceInDifferences:
                 self.outcome_column
             ]
             .mean()
-            .pivot(index=time_column, columns=self.treatment_column, values=self.outcome_column)
+            .pivot(
+                index=time_column,
+                columns=self.treatment_column,
+                values=self.outcome_column,
+            )
             .rename(columns={0: "control_mean", 1: "treated_mean"})
             .reset_index()
             .sort_values(time_column)
         )
-        if "control_mean" not in grouped.columns or "treated_mean" not in grouped.columns:
-            raise ValueError("Trend diagnostics need both treatment groups in selected period.")
+        if (
+            "control_mean" not in grouped.columns
+            or "treated_mean" not in grouped.columns
+        ):
+            raise ValueError(
+                "Trend diagnostics need both treatment groups in selected period."
+            )
         grouped["gap"] = grouped["treated_mean"] - grouped["control_mean"]
         return grouped.rename(columns={time_column: "time"})
 
@@ -305,12 +320,19 @@ class DifferenceInDifferences:
                 self.outcome_column
             ]
             .mean()
-            .pivot(index=time_column, columns=self.treatment_column, values=self.outcome_column)
+            .pivot(
+                index=time_column,
+                columns=self.treatment_column,
+                values=self.outcome_column,
+            )
             .rename(columns={0: "control_mean", 1: "treated_mean"})
             .reset_index()
             .sort_values(time_column)
         )
-        if "control_mean" not in grouped.columns or "treated_mean" not in grouped.columns:
+        if (
+            "control_mean" not in grouped.columns
+            or "treated_mean" not in grouped.columns
+        ):
             raise ValueError("Need both treatment groups to plot parallel trends.")
 
         fig = create_did_parallel_trends_figure(

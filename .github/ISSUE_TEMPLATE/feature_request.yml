@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose an improvement or a new causal-inference workflow
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What problem would this feature solve, and for whom?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired API and output, if known.
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References and provenance
+      description: Link primary papers, datasets, or implementations that inform the proposal.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any workarounds or alternative designs.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues and discussions for similar requests.
+          required: true

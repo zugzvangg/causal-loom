@@ -102,36 +102,50 @@ def select_control_group_by_features(
     prepared[date_column] = pd.to_datetime(prepared[date_column])
 
     pre_treatment_data = prepared[prepared[date_column] < treatment_date]
-    treated_unit_data = pre_treatment_data[pre_treatment_data[unit_column] == treated_unit]
+    treated_unit_data = pre_treatment_data[
+        pre_treatment_data[unit_column] == treated_unit
+    ]
     if treated_unit_data.empty:
         raise ValueError(f"No pre-treatment data for treated unit {treated_unit}")
 
-    control_candidates = pre_treatment_data[pre_treatment_data[unit_column] != treated_unit]
+    control_candidates = pre_treatment_data[
+        pre_treatment_data[unit_column] != treated_unit
+    ]
     used_exact_matching = len(categorical_features) > 0
     if categorical_features:
         treated_values = {
-            feature: treated_unit_data.iloc[0][feature] for feature in categorical_features
+            feature: treated_unit_data.iloc[0][feature]
+            for feature in categorical_features
         }
         exact_mask = control_candidates[categorical_features].apply(
-            lambda row: all(row[feature] == treated_values[feature] for feature in categorical_features),
+            lambda row: all(
+                row[feature] == treated_values[feature]
+                for feature in categorical_features
+            ),
             axis=1,
         )
         control_candidates = control_candidates[exact_mask]
 
     if control_candidates.empty and fallback_to_all_candidates:
-        control_candidates = pre_treatment_data[pre_treatment_data[unit_column] != treated_unit]
+        control_candidates = pre_treatment_data[
+            pre_treatment_data[unit_column] != treated_unit
+        ]
     if control_candidates.empty:
         raise ValueError("No control candidates available after matching rules.")
 
     if numeric_features:
         control_means = (
-            control_candidates.groupby(unit_column)[numeric_features].mean().reset_index()
+            control_candidates.groupby(unit_column)[numeric_features]
+            .mean()
+            .reset_index()
         )
         treated_means = treated_unit_data[numeric_features].mean().values.reshape(1, -1)
         scaler = StandardScaler()
         control_scaled = scaler.fit_transform(control_means[numeric_features].values)
         treated_scaled = scaler.transform(treated_means)
-        control_means["distance"] = np.linalg.norm(control_scaled - treated_scaled, axis=1)
+        control_means["distance"] = np.linalg.norm(
+            control_scaled - treated_scaled, axis=1
+        )
         closest = (
             control_means.nsmallest(number_of_units, "distance")[unit_column]
             .astype(str)
@@ -139,7 +153,13 @@ def select_control_group_by_features(
         )
         used_numeric_matching = True
     else:
-        closest = control_candidates[unit_column].drop_duplicates().head(number_of_units).astype(str).tolist()
+        closest = (
+            control_candidates[unit_column]
+            .drop_duplicates()
+            .head(number_of_units)
+            .astype(str)
+            .tolist()
+        )
         used_numeric_matching = False
 
     return MatchingResult(

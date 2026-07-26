@@ -28,6 +28,7 @@ class ConformalFrame:
     post_treatment_controls: pd.DataFrame
     panel: pd.DataFrame
 
+
 # ====================== Synthetic Control ======================
 
 
@@ -207,10 +208,9 @@ def build_synthetic_control_matrices(
     prepared["after_treatment"] = prepared[date_column] > treatment_date
 
     pre_treatment = prepared.query("~after_treatment")
-    matrix = (
-        pre_treatment.pivot(index=unit_column, columns=date_column)[features]
-        .T.fillna(0.0)
-    )
+    matrix = pre_treatment.pivot(index=unit_column, columns=date_column)[
+        features
+    ].T.fillna(0.0)
     y = matrix[treated_unit].values
     X = matrix.drop(columns=treated_unit).values
     control_units = matrix.drop(columns=treated_unit).columns.tolist()
@@ -224,6 +224,7 @@ def build_synthetic_control_matrices(
         "control_units": control_units,
         "all_dates": all_dates,
     }
+
 
 # ====================== Confrormal ======================
 

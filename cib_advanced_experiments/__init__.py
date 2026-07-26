@@ -14,6 +14,28 @@ from cib_advanced_experiments.difference_in_differences import (
     DifferenceInDifferencesResult,
     difference_in_differences,
 )
+from cib_advanced_experiments.experiment import (
+    Experiment,
+    ExperimentResult,
+    FitFailureResult,
+    FittedSyntheticControlResult,
+)
+from cib_advanced_experiments.matching import (
+    MatchingResult,
+    select_control_group_by_features,
+)
+from cib_advanced_experiments.model import SynthControlModel
+from cib_advanced_experiments.preprocessing import (
+    ConformalFrame,
+    build_conformal_frame,
+    prepare_panel_data,
+)
+from cib_advanced_experiments.propensity_score_matching import (
+    PropensityScoreMatchingResult,
+    propensity_score_match,
+    select_control_group_by_propensity_from_panel,
+)
+from cib_advanced_experiments.synthetic_control import PlaceboResult, SyntheticControl
 from cib_advanced_experiments.synthetic_difference_in_differences import (
     StaggeredSyntheticDifferenceInDifferencesResult,
     SyntheticDifferenceInDifferences,
@@ -29,42 +51,22 @@ from cib_advanced_experiments.synthetic_difference_in_differences import (
     residualize_outcome,
     synthetic_difference_in_differences,
 )
-from cib_advanced_experiments.experiment import (
-    Experiment,
-    ExperimentResult,
-    FitFailureResult,
-    FittedSyntheticControlResult,
-)
-from cib_advanced_experiments.matching import MatchingResult, select_control_group_by_features
-from cib_advanced_experiments.model import SynthControlModel
-from cib_advanced_experiments.preprocessing import (
-    ConformalFrame,
-    build_conformal_frame,
-    prepare_panel_data,
-)
-from cib_advanced_experiments.propensity_score_matching import (
-    PropensityScoreMatchingResult,
-    propensity_score_match,
-    select_control_group_by_propensity_from_panel,
-)
-from cib_advanced_experiments.synthetic_control import PlaceboResult, SyntheticControl
 from cib_advanced_experiments.visualization import (
-    create_experiment_aggregated_series_figure,
-    create_did_2x2_figure,
-    create_did_parallel_trends_figure,
-    create_placebo_distribution_figure,
-    create_placebo_gap_figure,
     create_conformal_ci_band_figure,
     create_conformal_dashboard_figure,
     create_conformal_p_value_grid_figure,
     create_conformal_residuals_decomposition_figure,
     create_conformal_residuals_figure,
+    create_did_2x2_figure,
+    create_did_parallel_trends_figure,
+    create_experiment_aggregated_series_figure,
     create_experiment_distributions_figure,
+    create_placebo_distribution_figure,
+    create_placebo_gap_figure,
     create_synthetic_control_effect_figure,
     create_synthetic_control_series_figure,
     create_synthetic_control_weights_figure,
 )
-
 
 __all__ = [
     "build_conformal_frame",
