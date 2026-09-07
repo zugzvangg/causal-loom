@@ -61,7 +61,7 @@ dev = [
     "ruff>=0.14.14",
 ]
 notebooks = [
-    "notebook==7.5.5",
+    "notebook==7.6.2",
     "jupyter>=1.1.1",
 ]
 
